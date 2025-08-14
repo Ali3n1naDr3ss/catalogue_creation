@@ -1,4 +1,5 @@
 import os
+import re
 import warnings
 import numpy as np
 from astropy.wcs import WCS
@@ -55,36 +56,52 @@ def open_cats(cats, open_subset=True, overwrite=True):
     INPUT(s)
         cats[list(str)]     list of paths to the cats you want to open. 
                             Typically, the ones you just made by looping through image_depths.  """
+    command = f"topcat "
+    catsToOpen = []
 
+    for cat in cats:
+        catDir = os.path.dirname(cat)
+        catName = os.path.basename(cat)[:-len('.fits')]
+        subsetBase = os.path.join(catDir, catName)
+        if '_subset' in subsetBase: # if a subset already exists, skip
+            continue
+        else:
+            catsToOpen.append(cat)
+    files_str = " ".join(catsToOpen)
+    files_str = " ".join(catsToOpen)
+    command += f"{files_str} "
+   
     if open_subset == False:
-        # join all filenames into one space-separated string for shell command
-        files_str = " ".join(cats)
-        command = f"topcat {files_str} &"
+        command += " &"
         print(command)
         os.system(command)
 
     elif open_subset == True:
-        # join all filenames into one space-separated string for shell command
-        files_str = " ".join(cats)
-        command = f"topcat {files_str} "
-
-    # assuming subset = MAG_APER[1]>50
+        # assuming subset = MAG_APER[1]>50
         subsets = []
         for cat in cats:
-            table = Table.read(cat)
-            subset = table[table["MAG_APER"][:, 1] > 50 ]  # criterion by which to create a subset
+            # if subset name not already in cats, make subset 
             catDir = os.path.dirname(cat)
             catName = os.path.basename(cat)[:-len('.fits')]
             subsetBase = os.path.join(catDir, catName)
-            subsetPath = subsetBase +'_subset.fits'
-            subset.write(subsetPath, overwrite=overwrite)
-            subsets.append(subsetPath)
-    files_str = " ".join(subsets)
-    command += f"{files_str} &"
-    print(command)
-    # TODO: bug - opens too many cats if too many exist!
-    breakpoint()
-    os.system(command)
+
+            if '_subset' in subsetBase: # if a subset already exists, skip
+                continue
+            else:
+                subsetPath = subsetBase +'_subset.fits'
+                subsets.append(subsetPath)
+            if os.path.isfile(subsetPath) == False:
+                table = Table.read(cat)
+                subset = table[table["MAG_APER"][:, 1] > 50 ]  # criterion by which to create a subset
+                subset.write(subsetPath, overwrite=overwrite)
+                subsets.append(subsetPath)
+        
+        files_str = " ".join(subsets)
+        command += f"{files_str} &"
+        print(command)
+        os.system(command)
+
+        return subsets
 
 ######################## make cutout for testing on ################################
 def make_cutout(filters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=True, overwrite=True):
@@ -274,6 +291,246 @@ def make_cutout(filters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=Tr
     
     return outFiles          
 ######################## do depths ##################################################
+def aperture_photometry_blank(imageName, segMap, whtMap, apSize, gridSeparation = 100, pixScale = -99.0, next = 0, clean = False, outputFitsName = 'none', imageDir = '', verbose =False, field = 'NORMAL', overwrite = False):
+    print("aperphotblank ", segMap, whtMap, apSize)
+    #from photutils import CircularAperture
+    #from photutils import aperture_photometry
+    from astropy.io import fits
+    from astropy.table import Table, hstack, join
+    import time
+    #import sep # aperture photometry from SExtractor!
+    
+    print("hellooooo",imageName, outputFitsName, (os.path.isfile(outputFitsName) and (overwrite == False)))
+    # first check if output exists
+    if os.path.isfile(outputFitsName) and (overwrite == False):
+
+        origTable = Table.read(outputFitsName)
+        cols = np.array(origTable.colnames)
+        
+        # check if all the columns are there
+        change = -1
+        
+        # modify the column names
+        for tt, typ in enumerate(['IMAGE', 'SEG', 'WHT']):
+            for	ai, apD	in enumerate(apSize):
+                
+                oldcolname = '{0}_flux_{1}'.format(typ, ai)
+                newcolname = '{0}_flux_{1:.1f}as'.format(typ, apD)
+                
+                if np.any(oldcolname == cols):
+                    origTable.rename_column(oldcolname, newcolname)
+                    change = 1
+                    print('Renaming column from ', oldcolname, newcolname)
+        
+        # overwrite the file
+        if change > 0:
+            print(origTable.colnames)
+            origTable.write(outputFitsName, overwrite = True)
+            print('aperture phot file updated ', outputFitsName)
+
+            
+    # check if the column I want exists yet or not
+    if os.path.isfile(outputFitsName) and (overwrite == False):
+        
+        origTable = Table.read(outputFitsName)
+        cols = np.array(origTable.colnames)
+        missingAps = np.ones(apSize.size, dtype = bool)
+        
+        for ai, apD in enumerate(apSize):
+            reqCol = '{0}_flux_{1:.1f}as'.format('IMAGE', apD)
+            kk = np.any(cols == reqCol)
+            if kk:
+                missingAps[ai] = False
+                
+        print('Checking the apertures ', missingAps)
+        if np.any(missingAps):
+            print('I need to re-run adding this aperture', apSize[missingAps])
+        else:
+            print('All required aps are present, do not need to run again')
+            return
+
+        append = True
+        apSize = apSize[missingAps]
+        
+    else:
+        append = False
+        
+    ## Get the pixel scale
+    if verbose:
+        print(imageName)
+    
+    hdulist = fits.open(imageName)
+    header = hdulist[next].header
+    imageData = hdulist[next].data
+    
+    if pixScale < 0.0:
+        # read from header
+        if 'CD1_1' in header:
+            cdone_o = -3600.0*header['CD1_1']
+        else:
+            cdone_o = 3600.0*np.abs(header['CDELT1'])
+        pixScale = round(cdone_o, 5)
+        
+    
+    ## Get the apertures size, in pixels
+    apSizePix = apSize/pixScale
+    
+    ## First just try a simple grid
+    ## grab the dimensions
+    naxis1 = header['NAXIS1']
+    naxis2 = header['NAXIS2']
+    
+    #gridSeparation = 20 ## pixels
+    
+    ## create arrays of the central coordinates
+    numberX = int((naxis1-gridSeparation)/gridSeparation)
+    numberY = int((naxis2-gridSeparation)/gridSeparation)
+    numberApertures = numberX*numberY
+    print('The number of apertures is ', numberApertures)
+    
+    
+    #apertureArray = np.zeros([numberApertures, 2])
+    xArray = np.zeros(numberApertures)
+    yArray = np.zeros(numberApertures)
+    halfGrid = gridSeparation/2
+        
+    numberHere = 0
+    for xi in range(numberX):
+        for yi in range(numberY):
+            #apertureArray[numberHere, :] = [halfGrid+xi*gridSeparation, halfGrid+yi*gridSeparation]
+            # print "the coords are ", apertureArray[:, numberHere]
+            xArray[numberHere] = halfGrid+xi*gridSeparation
+            yArray[numberHere] = halfGrid+yi*gridSeparation
+            numberHere = numberHere + 1
+
+    ## now do aperture photometry on both
+    ## setup the apertures
+    radii = apSizePix/2.0
+    if verbose:
+        print("Here")
+
+    ## 1) the image
+    tic = time.time()
+    phot_image = aperture_phot_fast(imageData, xArray, yArray, radii)
+    toc = time.time()
+    hdulist.close()
+    if verbose:
+        print("Finished doing the photometry for image in time {0}".format(toc-tic))
+
+    ## 2) the seg
+    ## I don't care about interpolation here
+    hdulist = fits.open(segMap)
+    segData = hdulist[next].data
+    phot_seg = aperture_phot_fast(segData, xArray, yArray, np.array(radii), subpix = 1)    
+    hdulist.close()
+    if verbose:
+        print("Finished doing the photometry for seg in time {0}".format(toc-tic))
+    
+    ## 3) the wht
+    ## to exclude pixels off the edge
+    if whtMap[-4:].lower() == 'none':
+        print("No weight data. ")
+        ## Just use the image instead.
+        phot_wht = Table(phot_image, copy = True)
+        
+        ## absolute these
+        for ri, r in enumerate(radii):
+            name = 'flux_' + str(ri)
+            phot_wht[name] = np.abs(phot_wht[name])
+        
+    else:
+        hdulist = fits.open(whtMap)
+        whtData = hdulist[next].data
+        phot_wht = aperture_phot_fast(whtData, xArray, yArray, np.array(radii), subpix = 1)
+        print("phot_wht", phot_wht, "that means sep has run")
+    # centre means a pixel is either in or outside the aperture
+        hdulist.close()
+        
+    ## Save these results to a fits file
+    ## I can do cuts etc in another code
+    ## to speed this up!!
+
+    if outputFitsName == 'none':
+        directory = imageDir + 'depths/catalogues/'
+        filterName = segMap[0:segMap.rfind('_')]
+        outputFitsName = filterName + + '_aperPhot.fits'
+        
+    # stack the tables
+    bigTable = hstack([phot_image, phot_seg, phot_wht], table_names=['IMAGE', 'SEG', 'WHT'], uniq_col_name='{table_name}_{col_name}')
+    
+    bigTable = Table(bigTable)
+    
+    # remove columns to make it more streamlined
+    bigTable.remove_column('WHT_xcenter')
+    bigTable.remove_column('WHT_ycenter')
+    bigTable.remove_column('SEG_xcenter')
+    bigTable.remove_column('SEG_ycenter')
+
+    if append:
+        for ri, r in enumerate(radii):
+            bigTable.remove_column('SEG_flux_{0}'.format(ri))
+            bigTable.remove_column('WHT_flux_{0}'.format(ri))
+    else:
+        for ri, r in enumerate(radii):
+            if ri != 2:
+                bigTable.remove_column('SEG_flux_{0}'.format(ri))
+                bigTable.remove_column('WHT_flux_{0}'.format(ri))        
+
+                
+        if clean:
+
+            print('Cleaning at the aperture phot level')
+            # remove the bad columns here.
+            smallNum = 0.0000001
+            deltaZero = 1E-13 #0.00000001
+            apString = '2'
+            
+            seg_sum = np.array(bigTable['SEG_flux_' + apString])
+            wht_sum = np.array(bigTable['WHT_flux_' + apString])
+            ap_sum = np.array(bigTable['IMAGE_flux_' + apString])
+            
+            if field == 'NIRSPEC':
+                good_indicies = (seg_sum < 0.5)  & (wht_sum > -1E-28) & (wht_sum < 1E28)
+                
+            else:
+                good_indicies = (seg_sum < 0.5)  & (wht_sum > smallNum) & ((ap_sum > deltaZero) | (ap_sum < -deltaZero))
+            #good_indicies = np.where(good_indicies)
+            bigTable = bigTable[good_indicies]
+
+    # rename the columns with the diameter size
+    for tt, typ in enumerate(['IMAGE', 'SEG', 'WHT']):
+        for ai, apD in enumerate(apSize):
+            
+            oldcolname = '{0}_flux_{1}'.format(typ, ai)
+            newcolname = '{0}_flux_{1:.1f}as'.format(typ, apD)
+            if oldcolname in np.array(bigTable.colnames):
+                print('Renaming column from ', oldcolname, newcolname)
+                bigTable.rename_column(oldcolname, newcolname)
+            
+    bigTable.info
+    
+    # remove the wht and seg columns
+    #bigTable.remove_column('WHT_flux_' + apString)
+    #bigTable.remove_column('SEG_flux_' + apString)
+
+    if append:
+        print(bigTable.colnames)
+        print(origTable.colnames)
+        
+        # join with the big table!
+        print('Appending to big aper phot table, lengths = {0}, {1}'.format(len(bigTable), len(origTable)))
+        bigTable = join(origTable, bigTable, keys = ['IMAGE_xcenter', 'IMAGE_ycenter'])
+        print(bigTable.colnames)
+        print('After ', bigTable)
+    #exit()
+        
+    #bigTable.meta['aperture_photometry_args'] = ''
+    bigTable.write(outputFitsName, overwrite = True)
+    print("tired",bigTable)
+    print("Aperture table has been saved to ", outputFitsName)
+     
+    return
+
 
 def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), whtPath='NONE', whtType='NONE', IRACapDiametersAS=np.array([2.8, 3.8, 5.8, 9.8, 11.6]), segPath='NONE', outputDir='none', filterName='NONE', numApertures=300, step=200, overwrite=False, inputSex=baseDir+'data/bertin_config/video_mine.sex', strips=False, bgSub=True, mask='none', gridSepAS=3.0):
 
@@ -292,6 +549,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
         if os.path.isdir(outputDir) == False:
             os.system('mkdir ' + outputDir)
         print("outputDir will be: ", outputDir)
+
     # seg map, bkg map, bgsub images
     imageDir = outputDir + 'images/'
     if os.path.isdir(imageDir) == False:
@@ -428,6 +686,30 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
             print(f"The SEG and/or BG subtracted map exist at: {segPath, bgSubPath} \n")
 
     ### TODO: get the rest of this function from new_depth_codes i.e. Next step is to place apertures down
+    aperPhotFile = aperDir + filterName + '_aperPhot.fits'
+    overwrite = False
+    if os.path.isfile(aperPhotFile) == False or overwrite == True:
+        # define the grid separation
+        gridSepPixels = np.ceil(gridSepAS/pixScale) # 5'' separation
+        print("test: ",gridSepPixels)
+        # gridSepPixels = 10.0
+        
+        # make this tunable...
+        if bgSub == False:
+            bgSubPath = imagePath
+            print("Not using bg subtracted image.")
+        print("Measuring the aperture photometry.")
+
+        ii = segPath.rfind('NIRSPEC')
+        if ii > 0:
+            field = 'NIRSPEC'
+        else:
+            field = 'NONE'
+
+        print("aperture_photometry_blank is running")
+        # if aperphotfile doesn't exist, call ap phot blank - the output fits is aperphotfile
+       # aperture_photometry_blank(bgSubPath, segPath, whtPath, apDiametersAS, gridSeparation = gridSepPixels, clean = True, outputFitsName = aperPhotFile, imageDir = imageDir, field = field, overwrite = overwrite)
+
     return
 
 def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'], apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), dataDir=baseDir+'data/', outputDir='none', overwrite=False):
@@ -499,7 +781,7 @@ def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'],
                 jj = (filterName == stripFilt)
                 if np.any(jj):
                     strips = True 
-            image_depth(imageDir + imageName, zeropoint, cutouts=cutouts, size=size, whtPath= imageDir + whtName, whtType = whtType, outputDir=outputDir, strips=strips, filterName = filterName, overwrite = overwrite, mask = maskName, gridSepAS = gridSepAS, apDiametersAS = apDiametersAS)
+            image_depth(imageDir+imageName, zeropoint, cutouts=cutouts, size=size, whtPath=imageDir+whtName, whtType=whtType, outputDir=outputDir, strips=strips, filterName=filterName, overwrite=overwrite, mask=maskName, gridSepAS=gridSepAS, apDiametersAS=apDiametersAS)
 
         else:
             strips = "False"
@@ -537,11 +819,24 @@ def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'],
     if outputDir == 'none':
         outputDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/'
         for cat in os.listdir(outputDir):
-            catPath = os.path.join(outputDir, cat)
-            cats.append(catPath)
+            for filt in reqFilters:
+                pattern = (rf"d{size}{filt}_cutout\.fits")
+                if re.fullmatch(pattern, cat):
+                    catPath = os.path.join(outputDir, cat)
+                    cats.append(catPath)
 
-    open_cats(cats, open_subset=True, overwrite=True)
-    
+    subsets = open_cats(cats, open_subset=True, overwrite=True)
+
+    for subset in subsets:
+        for filt in reqFilters:
+            subpattern = (rf"{baseDir}depths/catalogues/"
+                        rf"d{size}{filt}_cutout_subset\.fits")
+            if re.fullmatch(subpattern, subset):
+                print("test!!!!!", subset)
+                cutoutPath = f"{baseDir}depths/catalogues/d{size}{filt}_cutout.fits"
+                cutoutTable = Table.read(cutoutPath)
+                subsetTable = Table.read(subset)
+                print(f"{filt}-bad-proportion: ", round(100*(len(subsetTable)/len(cutoutTable)),5), "%")
     return
     
 
