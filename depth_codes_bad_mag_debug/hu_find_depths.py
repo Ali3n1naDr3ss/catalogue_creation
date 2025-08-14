@@ -12,6 +12,7 @@ Are the segmentation maps being produced correctly?
 
 ###################### Import useful modules #########################
 import os
+import re
 import sys
 import numpy as np
 from datetime import datetime
@@ -22,19 +23,19 @@ baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'
 
 fields = ['COSMOS']
 reqFilters = ['J', 'JH'] # <<<<<<<<<< may want to change this when running
-testing = False          # <<<<<<<<<< may want to change this when running
-size_arcsec = 100        # <<<<<<<<<< may want to change this when running
+testing = True           # <<<<<<<<<< may want to change this when running
+size_arcsec = 1000        # <<<<<<<<<< may want to change this when running
+
+cutoutFile = os.path.join(baseDir, 'data/COSMOS/cutouts/cutoutNames.txt')
 
 if testing:
     centre_ra = 149.5
     centre_dec = 2.2
     verbose = False
-    overwrite = True # overwrites: cutouts, deptha/catalogues, depths/images, depths/results
+    overwrite = False # overwrites: cutouts, deptha/catalogues, depths/images, depths/results
 else:
-    cutouts = os.path.join(baseDir, 'data/COSMOS/cutouts/cutoutNames.txt')
     verbose = False
     overwrite = False # bc full-size result files are so large and time-consuming to produce, delete the file you don't want instead of writing over inadvertantly
-
 
 ###################### Apertures ##############################################
 # required aperture diameters to run through
@@ -42,25 +43,40 @@ else:
 apDiametersAS = np.array([1.0, 1.8, 2.0, 3.0, 4.0])
 
 ########## Function call #######################################################
-
 print("hu_find_depths.py run at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
+cutouts = []
+centre_ra_str = str(centre_ra).replace('.', '')
+centre_dec_str = str(centre_dec).replace('.', '')
+
+if os.path.isfile(cutoutFile):
+    with open(cutoutFile, 'r') as c:
+        for line in c:
+            line = line.strip()
+            for filt in reqFilters:
+                pattern = (
+                    rf"{baseDir}data/COSMOS/cutouts/"
+                    rf"UVISTA_{filt}_DR6_{centre_ra_str}_{centre_dec_str}_size{size_arcsec}\.fits")
+                if re.fullmatch(pattern, line):
+                    cutouts.append(line)
+                whtpattern = (
+                    rf"{baseDir}data/COSMOS/cutouts/"
+                    rf"UVISTA_{filt}_DR6_wht_{centre_ra_str}_{centre_dec_str}_size{size_arcsec}\.fits")
+                if re.fullmatch(whtpattern, line):
+                    cutouts.append(line)
+
 for ff, fieldName in enumerate(fields):
-    outputDir = '../depths/{0}'.format(fieldName) # HOLLY 17/07/25 doing some tests
+    outputDir = '../depths/{0}'.format(fieldName) # 17/07/25
 
     if os.path.isdir(outputDir) == False:
         os.system('mkdir ' + outputDir)
     
     dataDir = baseDir + 'data/' + fieldName + '/'
 
-    if testing:
-        cutouts = make_cutout(reqFilters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=verbose, overwrite=overwrite) # todo: write filenames of cutouts to file so i dont have to generate them each time
+    if len(cutouts) == 0: # if the correct cutoutsdo not exist, make them
+        cutouts = make_cutout(reqFilters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=verbose, overwrite=overwrite)
 
-    # get the depths
-    # read in cutouts file as a list
-    with open(cutouts, 'r') as f:
-        cutouts = [line.strip() for line in f if line.strip()]  # strip removes \n and skips empty lines
-    
+     # get the depths
     get_depths(fieldName, cutouts, size=str(size_arcsec), queue='none', reqFilters=reqFilters, overwrite=overwrite, outputDir='none', apDiametersAS=np.array([1.0, 1.8, 2.0, 3.0, 4.0]))
 
 
