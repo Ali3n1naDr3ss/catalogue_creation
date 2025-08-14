@@ -1,0 +1,2 @@
+#!/bin/bash
+python3 stupid.py /raid/scratch/data/COSMOS/UVISTA_J_DR6.fits /raid/scratch/data/COSMOS/UVISTA_J_DR6_wht.fits MAP_WEIGHT 30.0 ../depths/COSMOS/ True J False ../masks/COSMOS/Y_current.reg 3.0 1.00,1.80,2.00,3.00,4.00
