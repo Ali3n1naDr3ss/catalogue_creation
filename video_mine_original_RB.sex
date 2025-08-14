@@ -1,0 +1,75 @@
+#-------------------------------- Catalog ------------------------------------
+
+CATALOG_NAME    r2_J.cat	# name of the output catalog
+CATALOG_TYPE	ASCII_HEAD	# "NONE","ASCII_HEAD","ASCII","FITS_1.0"
+				# or "FITS_LDAC"
+
+PARAMETERS_NAME	/raid/scratch/data/bertin_config/finaloutput_rohan.param   # name of the file containing catalog
+#PARAMETERS_NAME	/mnt/vardy/vardygroupshare/data/bertin_config/jwstpsf_output.param   # name of the file containing catalog
+
+#------------------------------- Extraction ----------------------------------
+
+DETECT_TYPE	CCD		# "CCD" or "PHOTO" (*)
+FLAG_IMAGE	flag.fits	# filename for an input FLAG-image
+DETECT_MINAREA	3		# minimum number of pixels above threshold
+DETECT_THRESH	1.4		# <sigmas> or <threshold>,<ZP> in mag.arcsec-2
+ANALYSIS_THRESH	1.4		# <sigmas> or <threshold>,<ZP> in mag.arcsec-2
+
+FILTER		Y		# apply filter for detection ("Y" or "N")?
+FILTER_NAME    $EXTRACTOR_DIR/gauss_2.5_5x5.conv # name of the file containing the filter
+#FILTER_NAME    $EXTRACTOR_DIR/gauss_1.5_3x3.conv # name of the file containing the filter # SMALLER FILTER FOR JWST
+
+DEBLEND_NTHRESH	32		# Number of deblending sub-thresholds
+DEBLEND_MINCONT	0.0001		# Minimum contrast parameter for deblending
+
+CLEAN		Y		# Clean spurious detections? (Y or N)?
+CLEAN_PARAM	1.0		# Cleaning efficiency
+
+MASK_TYPE	CORRECT		# type of detection MASKing: can be one of
+				# "NONE", "BLANK" or "CORRECT"
+
+#------------------------------ Photometry -----------------------------------
+
+PHOT_APERTURES  6.4516              # MAG_APER aperture diameter(s) in pixels, this is 
+PHOT_AUTOPARAMS	2.5, 5.376	      # MAG_AUTO parameters: <Kron_fact>,<min_radius>
+PHOT_AUTOAPERS  10.753, 10.753             # MAG_AUTO minimum diameters for detection,estimation
+PHOT_FLUXFRAC   0.5                   # CALCULATE RADII CONTAINING 20,50,80% OF TOTAL FLUX
+SATUR_LEVEL	500000           # level (in ADUs) at which arises saturation
+MAG_ZEROPOINT   30.0         # magnitude zero-point, THIS IS K-BAND IN AB SYSTEM
+MAG_GAMMA	4.0		# gamma of emulsion (for photographic scans)
+GAIN		0	# detector gain in e-/ADU.2.460669879E+02
+PIXEL_SCALE	0		# size of pixel in arcsec (0=use FITS WCS info).
+
+#------------------------- Star/Galaxy Separation ----------------------------
+
+SEEING_FWHM	0.7	        # stellar FWHM in arcsec
+STARNNW_NAME	$EXTRACTOR_DIR/default.nnw	# Neural-Network_Weight table filename
+
+#------------------------------ Background -----------------------------------
+BACK_SIZE	32		# Background mesh: <size> or <width>,<height>
+BACK_FILTERSIZE	9		# Background filter: <size> or <width>,<height>
+
+BACKPHOTO_TYPE	LOCAL		# can be "GLOBAL" or "LOCAL" (*)
+BACKPHOTO_THICK	24		# thickness of the background LOCAL annulus (*)
+
+#BACK_TYPE       AUTO
+#BACK_VALUE      0.0
+#------------------------------ Check Image ----------------------------------
+
+CHECKIMAGE_TYPE NONE     # can be one of "NONE", "BACKGROUND",
+	  		        # "MINIBACKGROUND", "-BACKGROUND", "OBJECTS",
+				# "-OBJECTS", "SEGMENTATION", "APERTURES",
+				# or "FILTERED" (*)
+CHECKIMAGE_NAME	r2_UDS-DR8-J_bin2x2seg.fits    # Filename 
+`
+#--------------------- Memory (change with caution!) -------------------------
+
+MEMORY_OBJSTACK	65000		# number of objects in stack
+MEMORY_PIXSTACK	5000000		# number of pixels in stack
+MEMORY_BUFSIZE	1024		# number of lines in buffer
+
+#----------------------------- Miscellaneous ---------------------------------
+
+VERBOSE_TYPE	NORMAL		# can be "QUIET", "NORMAL" or "FULL" (*)
+WEIGHT_TYPE     MAP_WEIGHT    # variance map derived from external weight map.
+WEIGHT_IMAGE    J_wht_add.fits
