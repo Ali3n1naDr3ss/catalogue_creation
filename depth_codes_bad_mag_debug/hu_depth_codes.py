@@ -99,7 +99,7 @@ def open_cats(cats, open_subset=True, overwrite=True):
         files_str = " ".join(subsets)
         command += f"{files_str} &"
         print(command)
-        os.system(command)
+        #os.system(command) #TODO: turn me back on when needed! 
 
         return subsets
 
@@ -289,7 +289,153 @@ def make_cutout(filters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=Tr
         if unexpectedValues:
             print("original == cutout value: False ... for these Keys: \n", unmatchedValues)
     
-    return outFiles          
+    return outFiles   
+
+######################## Plotting and Figures ##################################################
+
+def detections_fig_3by2(cutoutPaths, catPaths, subsetPaths, verbose=True):
+    """ 
+    Makes a figure showing the science image, detections,
+    and subset detections for two filters in a 3x2 formation. 
+    Ready-made subsets should be passed to this function. 
+
+    cutoutPaths(list[str]):     A list of paths to the science cutouts you want to show e.g. 
+                                raid/scratch/hullyott/cataloguing/DepthsTestDir/data/COSMOS/cutouts/
+                                UVISTA_J_DR6_1495_22_size500.fits
+
+    catPaths(list[str]):        A list of paths to the detections catalogues made in the cutout regions
+                                e.g. /raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/
+                                d500JH_cutout.fits
+
+    subsetPaths(list[str]):     A list of paths to the subsets of detections made in the cutout regions
+                                e.g. /raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/
+                                d500JH_cutout_subset.fits
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import ScalarFormatter
+    from astropy.visualization import ZScaleInterval
+
+    ### initialise fig
+    fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+    zscale = ZScaleInterval() # z-scale all images
+    formatter = ScalarFormatter(useMathText=False)
+    formatter.set_scientific(False)
+    formatter.set_useOffset(False)
+
+    for i, cutoutPath in enumerate(cutoutPaths):
+        cutPlotTitle = os.path.basename(cutoutPath)
+        cutoutData, _, _ = get_fits_data(cutoutPath, verbose=verbose)
+        vmin, vmax = zscale.get_limits(cutoutData)
+        ax = axes[i, 0]
+        ax.imshow(cutoutData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+        ax.set_title(f"{cutPlotTitle}", fontsize=10)
+        ax.xaxis.set_major_formatter(formatter)
+        ax.axis('off')
+
+    for i, catPath in enumerate(catPaths):
+        catPlotTitle = os.path.basename(catPath)
+        catTable = Table.read(catPath)
+        ra = catTable['ALPHA_J2000']
+        dec = catTable['DELTA_J2000']
+        ax_cat = axes[i, 1]
+        ax_cat.scatter(ra, dec, color='blue', alpha=0.5, s=1)
+        ax_cat.set_title(f"{catPlotTitle}", fontsize=10)
+        ax_cat.xaxis.set_major_formatter(formatter)
+        ax_cat.invert_xaxis()  # invert RA axis to match sky convention
+        ax_cat.grid(True)
+
+    for i, subsetPath in enumerate(subsetPaths):
+        subsetPlotTitle = os.path.basename(subsetPath)
+        subsetTable = Table.read(subsetPath)
+        ra = subsetTable['ALPHA_J2000']
+        dec = subsetTable['DELTA_J2000']
+        ax_sub = axes[i, 2]
+        ax_sub.scatter(ra, dec, color='green', alpha=0.5, s=1)
+        ax_sub.set_title(f"{subsetPlotTitle}", fontsize=10)
+        ax_sub.xaxis.set_major_formatter(formatter)
+        ax_sub.invert_xaxis()  # invert RA axis to match sky convention
+        ax_sub.grid(True)
+
+    plt.subplots_adjust(hspace=0.4, wspace=0.3)
+    plt.show()
+
+def detections_fig(cutoutPaths, catPaths, subsetPaths, badMags,verbose=True):
+    """ 
+    Makes a figure showing the science image, detections,
+    and subset detections for two filters in a 3x2 formation. 
+    Ready-made subsets should be passed to this function. 
+
+    cutoutPaths(list[str]):     A list of paths to the science cutouts you want to show e.g. 
+                                raid/scratch/hullyott/cataloguing/DepthsTestDir/data/COSMOS/cutouts/
+                                UVISTA_J_DR6_1495_22_size500.fits
+
+    catPaths(list[str]):        A list of paths to the detections catalogues made in the cutout regions
+                                e.g. /raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/
+                                d500JH_cutout.fits
+
+    subsetPaths(list[str]):     A list of paths to the subsets of detections made in the cutout regions
+                                e.g. /raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/
+                                d500JH_cutout_subset.fits
+
+    badMags(float):             Percentage of bag-mag detections within region. bad-mag == MAG_APER[1]>50
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import ScalarFormatter
+    from astropy.visualization import ZScaleInterval
+
+    ### initialise fig
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    zscale = ZScaleInterval() # z-scale all images
+    formatter = ScalarFormatter(useMathText=False)
+    formatter.set_scientific(False)
+    formatter.set_useOffset(False)
+
+    for i, (cutoutPath, subsetPath, badMag) in enumerate(zip(cutoutPaths, subsetPaths, badMags)):
+        cutPlotTitle = os.path.basename(cutoutPath).replace('.fits', '')
+        subsetPlotTitle = os.path.basename(subsetPath).replace('_cutout_subset.fits', 'Mag>50')
+        cutoutData, _, wcs = get_fits_data(cutoutPath, verbose=verbose)
+        subsetTable = Table.read(subsetPath)
+        subRA = subsetTable['ALPHA_J2000']
+        subDec = subsetTable['DELTA_J2000']
+        # Convert RA/Dec -> pixel coordinates
+        x_pix, y_pix = wcs.world_to_pixel_values(subRA, subDec)
+
+        vmin, vmax = zscale.get_limits(cutoutData)
+        ax = axes[i, 0]
+        ax.imshow(cutoutData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+        ax.set_title(f"{cutPlotTitle}", fontsize=10)
+        ax.scatter(x_pix, y_pix, color='red', alpha=0.5, s=10, label=subsetPlotTitle)
+        ax.legend()
+        #ax.invert_xaxis()  # invert RA axis to match sky convention
+        ax.grid(True)
+        ax.text(0,-500, f"MAG_APER[1]>50: {badMag}%")
+        ax.xaxis.set_major_formatter(formatter)
+        ax.set_xlabel("RA (deg)")
+        ax.set_ylabel("Dec (deg)")
+        ax.axis('off')
+
+    for i, (catPath, subsetPath) in enumerate(zip(catPaths, subsetPaths)):
+        catPlotTitle = os.path.basename(catPath)
+        subsetPlotTitle = os.path.basename(subsetPath)
+        catTable = Table.read(catPath)
+        subsetTable = Table.read(subsetPath)
+        ra = catTable['ALPHA_J2000']
+        dec = catTable['DELTA_J2000']
+        subRA = subsetTable['ALPHA_J2000']
+        subDec = subsetTable['DELTA_J2000']
+
+        ax_cat = axes[i, 1]
+        ax_cat.scatter(ra, dec, color='blue', alpha=0.5, s=1, label='all measurements')
+        ax_cat.scatter(subRA, subDec, color='red', alpha=0.5, s=1, label=subsetPlotTitle)
+        ax_cat.legend()
+        ax_cat.set_title(f"{catPlotTitle}", fontsize=10)
+        ax_cat.xaxis.set_major_formatter(formatter)
+        ax_cat.invert_xaxis()  # invert RA axis to match sky convention
+        ax_cat.grid(True)
+
+    plt.subplots_adjust(hspace=0.4, wspace=0.3)
+    plt.show()
+       
 ######################## do depths ##################################################
 def aperture_photometry_blank(imageName, segMap, whtMap, apSize, gridSeparation = 100, pixScale = -99.0, next = 0, clean = False, outputFitsName = 'none', imageDir = '', verbose =False, field = 'NORMAL', overwrite = False):
     print("aperphotblank ", segMap, whtMap, apSize)
@@ -708,11 +854,11 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
 
         print("aperture_photometry_blank is running")
         # if aperphotfile doesn't exist, call ap phot blank - the output fits is aperphotfile
-       # aperture_photometry_blank(bgSubPath, segPath, whtPath, apDiametersAS, gridSeparation = gridSepPixels, clean = True, outputFitsName = aperPhotFile, imageDir = imageDir, field = field, overwrite = overwrite)
+        # TODO: aperture_photometry_blank(bgSubPath, segPath, whtPath, apDiametersAS, gridSeparation = gridSepPixels, clean = True, outputFitsName = aperPhotFile, imageDir = imageDir, field = field, overwrite = overwrite)
 
     return
 
-def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'], apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), dataDir=baseDir+'data/', outputDir='none', overwrite=False):
+def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'], apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), dataDir=baseDir+'data/', outputDir='none', overwrite=False, ra_str='none', dec_str='none', verbose=True):
 
     # set the grid seperation in arcsec
     if fieldName == 'NIRSPEC':
@@ -815,28 +961,36 @@ def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'],
             os.system(command)
 
     # after each filter has been SE'd, open the cats
-    cats = []
+    catPaths = []
     if outputDir == 'none':
         outputDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/'
-        for cat in os.listdir(outputDir):
+        for catName in os.listdir(outputDir):
             for filt in reqFilters:
                 pattern = (rf"d{size}{filt}_cutout\.fits")
-                if re.fullmatch(pattern, cat):
-                    catPath = os.path.join(outputDir, cat)
-                    cats.append(catPath)
+                if re.fullmatch(pattern, catName):
+                    catPath = os.path.join(outputDir, catName)
+                    catPaths.append(catPath)
 
-    subsets = open_cats(cats, open_subset=True, overwrite=True)
+    subsetPaths = open_cats(catPaths, open_subset=True, overwrite=True)
+    cutoutPaths = [] # selection of files that will be passed to detections_fig() (i.e. excl wht files)
+    badMags = [] # all detections/bad_mag measurements
 
-    for subset in subsets:
+    for subsetPath in subsetPaths:
         for filt in reqFilters:
             subpattern = (rf"{baseDir}depths/catalogues/"
                         rf"d{size}{filt}_cutout_subset\.fits")
-            if re.fullmatch(subpattern, subset):
-                print("test!!!!!", subset)
-                cutoutPath = f"{baseDir}depths/catalogues/d{size}{filt}_cutout.fits"
-                cutoutTable = Table.read(cutoutPath)
-                subsetTable = Table.read(subset)
-                print(f"{filt}-bad-proportion: ", round(100*(len(subsetTable)/len(cutoutTable)),5), "%")
+            if re.fullmatch(subpattern, subsetPath):
+                catPath = f"{baseDir}depths/catalogues/d{size}{filt}_cutout.fits"
+                cutoutPath = f"{baseDir}data/COSMOS/cutouts/UVISTA_{filt}_DR6_{ra_str}_{dec_str}_size{size}.fits" # corresponds to the catalogue and subset catalogue
+                cutoutPaths.append(cutoutPath)
+                catTable = Table.read(catPath)
+                subsetTable = Table.read(subsetPath)
+                badMag = round(100*(len(subsetTable)/len(catTable)),5)
+                badMags.append(badMag)
+                print(f"{filt}-bad-proportion: ", badMag, "%")
+
+    detections_fig(cutoutPaths=cutoutPaths, catPaths=catPaths, subsetPaths=subsetPaths, badMags=badMags, verbose=verbose)
+
     return
     
 
