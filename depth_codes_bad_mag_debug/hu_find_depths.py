@@ -77,6 +77,6 @@ for ff, fieldName in enumerate(fields):
         cutouts = make_cutout(reqFilters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=verbose, overwrite=overwrite)
 
      # get the depths
-    get_depths(fieldName, cutouts, size=str(size_arcsec), queue='none', reqFilters=reqFilters, overwrite=overwrite, outputDir='none', apDiametersAS=np.array([1.0, 1.8, 2.0, 3.0, 4.0]))
+    get_depths(fieldName, cutouts, size=str(size_arcsec), queue='none', reqFilters=reqFilters, overwrite=overwrite, outputDir='none', apDiametersAS=np.array([1.0, 1.8, 2.0, 3.0, 4.0]), ra_str=centre_ra_str, dec_str=centre_dec_str, verbose=verbose)
 
 
