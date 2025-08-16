@@ -460,28 +460,21 @@ def bg_plotter(cutoutPaths='none', bgMapPaths='none', listBgSubDicts='none', bad
     ### initialise fig
     ncols = 0
     figTitleSubstr = []
+    for arg in [cutoutPaths, bgMapPaths, listBgSubDicts, segPaths, whtPaths]:
+        if arg != 'none':
+            ncols += 1
 
-    if cutoutPaths!='none':
-        ncols += 1
-        figTitleSubstr.append("science")
-
-    if bgMapPaths!='none':
-        ncols += 1
-        figTitleSubstr.append("bgMap")
-
-    if listBgSubDicts!='none':
-        ncols += 1
-        figTitleSubstr.append("bgSub")
-
-    if segPaths!='none':
-        ncols += 1
-        figTitleSubstr.append("seg")
-
-    if whtPaths!='none':
-        ncols += 1
-        figTitleSubstr.append("wht")
-
-    figTitleSubstr = '_'.join(figTitleSubstr)
+    for substrlist in [cutoutPaths, bgMapPaths, listBgSubDicts, badMags, segPaths, whtPaths]:
+        for substr in substrlist:
+            if type(substr) == dict or type(substr) == float or substrlist=='none': # if the list is listBgSubDicts or bad mags or not set
+                continue
+            substr = os.path.basename(substr)
+            substr = substr.replace('.fits', '')
+            substr = substr.replace('UVISTA_', '')
+            figTitleSubstr.append(substr)
+    figTitleSubstr = "_".join(figTitleSubstr).replace(' ', '_')
+    figTitleSubstr = list(dict.fromkeys(figTitleSubstr))
+    #print(figTitleSubstr)
     breakpoint()
     fig, axes = plt.subplots(nrows=len(listBgSubDicts), ncols=ncols, figsize=(12, 8))
     axes = np.atleast_2d(axes)  # forces 2D indexing
@@ -526,7 +519,7 @@ def bg_plotter(cutoutPaths='none', bgMapPaths='none', listBgSubDicts='none', bad
             BgSubDict = listBgSubDicts[i]
             bgSubPath = BgSubDict['Path']
             bgSubName = os.path.basename(bgSubPath).replace('.fits', '').replace('_cutout_', ' ')
-            bgSubParams = f" BKSZ:{BgSubDict['back_size']} BKFILT:{BgSubDict['back_filtersize']}"
+            bgSubParams = f"BKSZ: {BgSubDict['back_size']} BKFILT: {BgSubDict['back_filtersize']}"
             bgSubPlotTitle = bgSubName + bgSubParams
             bgSubData, header, _ = get_fits_data(bgSubPath, verbose=verbose)
             vmin, vmax = zscale.get_limits(bgSubData)
@@ -567,6 +560,7 @@ def bg_plotter(cutoutPaths='none', bgMapPaths='none', listBgSubDicts='none', bad
 
     if saveFig and overwrite==True:
         outDir = '/raid/scratch/hullyott/cataloguing/plots/'
+        #outputPath = outDir+"background_comparison_"+bgSubParams.replace(":", '').replace(' ', '_')+ ".pdf"
         outputPath = outDir +  figTitleSubstr + bgSubParams.replace(":", '').replace(' ', '_') + ".pdf"
         try:
             plt.savefig(outputPath, format='pdf')
