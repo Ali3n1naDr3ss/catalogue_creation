@@ -6,6 +6,9 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from datetime import datetime
 from astropy.table import Table
+import matplotlib.pyplot as plt
+from matplotlib.ticker import ScalarFormatter
+from astropy.visualization import ZScaleInterval
 
 # make cutours (optional)
 # get_depths
@@ -52,10 +55,14 @@ def read_image_lis(dirHere):
 def open_cats(cats, open_subset=True, overwrite=True):
     """
         Opens catalogues for filters of interest in TOPCAT.
+        Also creates the subsets and returns them for future use.
 
     INPUT(s)
         cats[list(str)]     list of paths to the cats you want to open. 
-                            Typically, the ones you just made by looping through image_depths.  """
+                            Typically, the ones you just made by looping through image_depths.
+    OUTPUT(s)
+        subsets(list)       List of subset paths  """
+
     command = f"topcat "
     catsToOpen = []
 
@@ -80,22 +87,21 @@ def open_cats(cats, open_subset=True, overwrite=True):
         # assuming subset = MAG_APER[1]>50
         subsets = []
         for cat in cats:
-            # if subset name not already in cats, make subset 
             catDir = os.path.dirname(cat)
             catName = os.path.basename(cat)[:-len('.fits')]
-            subsetBase = os.path.join(catDir, catName)
+            subsetPath = os.path.join(catDir, catName + '_subset.fits')
 
-            if '_subset' in subsetBase: # if a subset already exists, skip
+            # skip if subset already exists
+            if os.path.isfile(subsetPath):
+                subsets.append(subsetPath)
                 continue
-            else:
-                subsetPath = subsetBase +'_subset.fits'
-                subsets.append(subsetPath)
-            if os.path.isfile(subsetPath) == False:
-                table = Table.read(cat)
-                subset = table[table["MAG_APER"][:, 1] > 50 ]  # criterion by which to create a subset
-                subset.write(subsetPath, overwrite=overwrite)
-                subsets.append(subsetPath)
-        
+
+            # create subset
+            table = Table.read(cat)
+            subset = table[table["MAG_APER"][:, 1] > 50]  # criterion
+            subset.write(subsetPath, overwrite=overwrite)
+            subsets.append(subsetPath)
+
         files_str = " ".join(subsets)
         command += f"{files_str} &"
         print(command)
@@ -357,12 +363,12 @@ def detections_fig_3by2(cutoutPaths, catPaths, subsetPaths, verbose=True):
         ax_sub.grid(True)
 
     plt.subplots_adjust(hspace=0.4, wspace=0.3)
-    plt.show()
+    #plt.show()
 
-def detections_fig(cutoutPaths, catPaths, subsetPaths, badMags,verbose=True):
+def detections_fig(cutoutPaths, catPaths, subsetPaths, badMags,saveFig=True, overwrite=True, verbose=True):
     """ 
-    Makes a figure showing the science image, detections,
-    and subset detections for two filters in a 3x2 formation. 
+    Makes a figure showing the science imagea and measurements,
+    overlayed by subset detections for two filters in a 2x2 formation. 
     Ready-made subsets should be passed to this function. 
 
     cutoutPaths(list[str]):     A list of paths to the science cutouts you want to show e.g. 
@@ -379,12 +385,10 @@ def detections_fig(cutoutPaths, catPaths, subsetPaths, badMags,verbose=True):
 
     badMags(float):             Percentage of bag-mag detections within region. bad-mag == MAG_APER[1]>50
     """
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import ScalarFormatter
-    from astropy.visualization import ZScaleInterval
 
     ### initialise fig
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig, axes = plt.subplots(nrows=len(cutoutPaths), ncols=2, figsize=(12, 8))
+    axes = np.atleast_2d(axes)  # forces 2D indexing
     zscale = ZScaleInterval() # z-scale all images
     formatter = ScalarFormatter(useMathText=False)
     formatter.set_scientific(False)
@@ -406,9 +410,8 @@ def detections_fig(cutoutPaths, catPaths, subsetPaths, badMags,verbose=True):
         ax.set_title(f"{cutPlotTitle}", fontsize=10)
         ax.scatter(x_pix, y_pix, color='red', alpha=0.5, s=10, label=subsetPlotTitle)
         ax.legend()
-        #ax.invert_xaxis()  # invert RA axis to match sky convention
         ax.grid(True)
-        ax.text(0,-500, f"MAG_APER[1]>50: {badMag}%")
+        ax.text(0.0,-50, f"MAG_APER[1]>50: {badMag}%", color='red')
         ax.xaxis.set_major_formatter(formatter)
         ax.set_xlabel("RA (deg)")
         ax.set_ylabel("Dec (deg)")
@@ -416,6 +419,7 @@ def detections_fig(cutoutPaths, catPaths, subsetPaths, badMags,verbose=True):
 
     for i, (catPath, subsetPath) in enumerate(zip(catPaths, subsetPaths)):
         catPlotTitle = os.path.basename(catPath)
+        size = re.findall(r'\d+', catPlotTitle)[0]
         subsetPlotTitle = os.path.basename(subsetPath)
         catTable = Table.read(catPath)
         subsetTable = Table.read(subsetPath)
@@ -434,19 +438,169 @@ def detections_fig(cutoutPaths, catPaths, subsetPaths, badMags,verbose=True):
         ax_cat.grid(True)
 
     plt.subplots_adjust(hspace=0.4, wspace=0.3)
+
+    if saveFig and overwrite==True:
+        outDir = '/raid/scratch/hullyott/cataloguing/plots/'
+        outputPath = outDir + size + "arcsec" + "detections_badMags.pdf"
+        try:
+            plt.savefig(outputPath, format='pdf')
+            print(f"Figure saved as {outputPath}")
+        except PermissionError:
+            print(f"Error: Permission denied. Could not save the file {outputPath}.")
+        except Exception as e:
+            print(f"Error: Could not save the file {outputPath}. Reason: {e}")
+
+    #plt.show()
+
+def bg_plotter(cutoutPaths='none', bgMapPaths='none', listBgSubDicts='none', badMags='none', segPaths='none', whtPaths='none', show_bad_mags=False, saveFig=True, overwrite=True, verbose=True):
+    """
+        
+    """
+
+    ### initialise fig
+    ncols = 0
+    figTitleSubstr = []
+    for arg in [cutoutPaths, bgMapPaths, listBgSubDicts, segPaths, whtPaths]:
+        if arg != 'none':
+            ncols += 1
+
+    for substrlist in [cutoutPaths, bgMapPaths, listBgSubDicts, badMags, segPaths, whtPaths]:
+        for substr in substrlist:
+            if type(substr) == dict or type(substr) == float or substrlist=='none': # if the list is listBgSubDicts or bad mags or not set
+                continue
+            substr = os.path.basename(substr)
+            substr = substr.replace('.fits', '')
+            substr = substr.replace('UVISTA_', '')
+            substr = substr.replace('_', ' ')
+            figTitleSubstr.append(substr)
+
+    fig, axes = plt.subplots(nrows=len(listBgSubDicts), ncols=ncols, figsize=(12, 8))
+    axes = np.atleast_2d(axes)  # forces 2D indexing
+
+    zscale = ZScaleInterval() # z-scale all images
+    formatter = ScalarFormatter(useMathText=False)
+    formatter.set_scientific(False)
+    formatter.set_useOffset(False)
+
+
+    col_idx = 0
+
+    # plot cutout region
+    if cutoutPaths != 'none':
+        for i, cutoutPath in enumerate(cutoutPaths):
+            cutPlotTitle = os.path.basename(cutoutPath).replace('.fits', '')
+            cutoutData, _, _ = get_fits_data(cutoutPath, verbose=verbose)
+            vmin, vmax = zscale.get_limits(cutoutData)
+            ax = axes[i, col_idx]
+            ax.imshow(cutoutData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax.set_title(f"{cutPlotTitle}", fontsize=10)
+            ax.xaxis.set_major_formatter(formatter)
+            ax.axis('off')
+
+    # plot bgmap
+    if bgMapPaths != 'none':
+        for i, bgMapPath in enumerate(bgMapPaths):
+            bgMapPlotTitle = os.path.basename(bgMapPath).replace('.fits', '').replace('_cutout_', '')
+            bgMapData, header, _ = get_fits_data(bgMapPath, verbose=verbose)
+            vmin, vmax = zscale.get_limits(bgMapData)
+            col_idx += 1
+            ax_bgmap = axes[i, col_idx]
+            ax_bgmap.imshow(bgMapData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax_bgmap.set_title(f"{bgMapPlotTitle}", fontsize=10)
+            ax_bgmap.xaxis.set_major_formatter(formatter)
+            ax_bgmap.axis('off')
+
+    # plot bgSub
+    if listBgSubDicts != 'none':
+        for i, BgSubDict in enumerate(listBgSubDicts):
+            bgSubPath = BgSubDict['Path']
+            bgSubName = os.path.basename(bgSubPath).replace('.fits', '').replace('_cutout_', ' ')
+            bgSubParams = "BKSZ: " + str(BgSubDict['back_size']) + " BKFILT: " + str(BgSubDict['back_filtersize'])
+            bgSubPlotTitle = bgSubName + bgSubParams
+            bgSubData, header, _ = get_fits_data(bgSubPath, verbose=verbose)
+            vmin, vmax = zscale.get_limits(bgSubData)
+            col_idx += 1
+            ax_bgsub = axes[i, col_idx]
+            ax_bgsub.imshow(bgSubData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax_bgsub.set_title(f"{bgSubPlotTitle}", fontsize=10)
+            ax_bgsub.xaxis.set_major_formatter(formatter)
+            ax_bgsub.axis('off')            
+
+    # plot segmentation maps
+    if segPaths != 'none':
+        for i, segPath in enumerate(segPaths):
+            segPlotTitle = os.path.basename(segPath).replace('.fits', '').replace('_cutout_', '')
+            segData, header, _ = get_fits_data(segPath, verbose=verbose)
+            vmin, vmax = zscale.get_limits(segData)
+            col_idx += 1
+            print("gggg",col_idx)
+            ax_seg = axes[i, col_idx]
+            ax_seg.imshow(segData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax_seg.set_title(f"{segPlotTitle}", fontsize=10)
+            ax_seg.xaxis.set_major_formatter(formatter)
+            ax_seg.axis('off')
+
+    # plot weight maps
+    if whtPaths != 'none':
+        for i, whtPath in enumerate(whtPaths):
+            whtPlotTitle = os.path.basename(whtPath).replace('.fits', '').replace('_cutout_', '')
+            whtData, header, _ = get_fits_data(whtPath, verbose=verbose)
+            vmin, vmax = zscale.get_limits(whtData)
+            col_idx += 1
+            ax_seg = axes[i, col_idx]
+            ax_seg.imshow(whtData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax_seg.set_title(f"{whtPlotTitle}", fontsize=10)
+            ax_seg.xaxis.set_major_formatter(formatter)
+            ax_seg.axis('off')
+
+    plt.subplots_adjust(hspace=0.4, wspace=0.3)
+
+    if saveFig and overwrite==True:
+        outDir = '/raid/scratch/hullyott/cataloguing/plots/'
+        #outputPath = outDir+"background_comparison_"+bgSubParams.replace(":", '').replace(' ', '_')+ ".pdf"
+        outputPath = outDir +  'k' + bgSubParams.replace(":", '').replace(' ', '_') + ".pdf"
+        try:
+            plt.savefig(outputPath, format='pdf')
+            print(f"Figure saved as {outputPath}")
+        except PermissionError:
+            print(f"Error: Permission denied. Could not save the file {outputPath}.")
+        except Exception as e:
+            print(f"Error: Could not save the file {outputPath}. Reason: {e}")
+
     plt.show()
+
        
 ######################## do depths ##################################################
-def aperture_photometry_blank(imageName, segMap, whtMap, apSize, gridSeparation = 100, pixScale = -99.0, next = 0, clean = False, outputFitsName = 'none', imageDir = '', verbose =False, field = 'NORMAL', overwrite = False):
+def aperture_photometry_blank(imageName, segMap, whtMap, apSize, gridSeparation=100, pixScale=-99.0, next=0, clean=False, outputFitsName='none', imageDir='', verbose=False, field='NORMAL', overwrite=False):
+    """
+    Performs aperture photometry across the image at fixed intervals (defined by gridSeperation), 
+    without regard for the positions of real astronomical sources.
+    This allows estimation of the background noise.
+
+    INPUT(s)
+        imageName(str)       FITS image to measure.
+	    segMap(str)          Segmentation map (mask for objects).
+	    whtMap(str)          Weight map (for noise or exposure info).
+	    apSize(arr)          Array of aperture diameters (arcseconds).
+	    gridSeparation(int)  Pixel separation between apertures.
+	    pixScale(float)      Pixel scale in arcseconds/pixel (reads from header if negative).
+	?	next(int)            HDU index in FITS file.
+	?	clean(Boolean)       Whether to filter out "bad" apertures.
+	    outputFitsName(str)  Path for output table (creates if doesn?t exist).
+	    imageDir(str)        Default directory for outputs.
+	?	field(str)           Special cleaning rules for certain fields (e.g., NIRSPEC).
+
+
+
+     """
+    
     print("aperphotblank ", segMap, whtMap, apSize)
-    #from photutils import CircularAperture
-    #from photutils import aperture_photometry
+
     from astropy.io import fits
     from astropy.table import Table, hstack, join
     import time
     #import sep # aperture photometry from SExtractor!
     
-    print("hellooooo",imageName, outputFitsName, (os.path.isfile(outputFitsName) and (overwrite == False)))
     # first check if output exists
     if os.path.isfile(outputFitsName) and (overwrite == False):
 
@@ -678,7 +832,29 @@ def aperture_photometry_blank(imageName, segMap, whtMap, apSize, gridSeparation 
     return
 
 
-def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), whtPath='NONE', whtType='NONE', IRACapDiametersAS=np.array([2.8, 3.8, 5.8, 9.8, 11.6]), segPath='NONE', outputDir='none', filterName='NONE', numApertures=300, step=200, overwrite=False, inputSex=baseDir+'data/bertin_config/video_mine.sex', strips=False, bgSub=True, mask='none', gridSepAS=3.0):
+def aperture_phot_fast(imageData, xArray, yArray, radii, subpix=5):
+    
+    # Subpix = 5 is what SEXtractor uses.
+    import sep
+    from astropy.table import Table, Column
+    
+    data = imageData.byteswap().newbyteorder()    
+    for ri, r in enumerate(radii):
+        flux, fluxerr, flag = sep.sum_circle(data, xArray, yArray, r, subpix = subpix)
+
+        if ri < 1:
+            # create a table of the results
+            phot_apertures = Table([xArray, yArray, flux], names = ['xcenter', 'ycenter', 'flux_0'], dtype = ['f4', 'f4', 'f4'])
+            
+        else:
+            newcolumn = Column(name = 'flux_' + str(ri), data = flux, dtype = 'f4')
+            phot_apertures.add_column(newcolumn)
+    
+    return phot_apertures
+
+
+
+def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, back_filtersize=9, apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), whtPath='NONE', whtType='NONE', IRACapDiametersAS=np.array([2.8, 3.8, 5.8, 9.8, 11.6]), segPath='NONE', outputDir='none', filterName='NONE', numApertures=300, step=200, overwrite=False, inputSex=baseDir+'data/bertin_config/video_mine.sex', strips=False, bgSub=True, mask='none', gridSepAS=3.0):
 
     warnings_triggered = 0
     cd1Test = False
@@ -760,6 +936,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
             exit()
 
     ###### seg map, SE, and Bkg Subtraction ###########################################
+    bgSubDict = {} # name, back_size, back_sizefilter
 
     if filterName == 'NONE':
         filterName = baseName # image name string without file extension
@@ -799,11 +976,19 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
             bgSubPath = imageDir  + filterName + size + '_cutout_bgsub.fits'
             bgMapPath = imageDir  + filterName + size + '_cutout_bgmap.fits'
             outputCatalogue = catDir + 'd' + size + filterName + '_cutout.fits'
+            # dict used in bg_plotter
+            bgSubDict['Path'] = bgSubPath
+            bgSubDict['back_size'] = back_size
+            bgSubDict['back_filtersize'] = back_filtersize
         else:
-            segPath = imageDir + filterName + '_seg.fits'  
-            bgSubPath = imageDir  + filterName + '_bgsub.fits'
-            bgMapPath = imageDir  + filterName + '_bgmap.fits'
             outputCatalogue = catDir + 'd' + filterName + '.fits'
+            segPath = imageDir + filterName + '_seg.fits'  
+            bgMapPath = imageDir  + filterName + '_bgmap.fits'
+            bgSubPath = imageDir  + filterName + '_bgsub.fits'
+            # dict used in bg_plotter
+            bgSubDict['Path'] = bgSubPath
+            bgSubDict['back_size'] = back_size
+            bgSubDict['back_filtersize'] = back_filtersize
 
         keywordsbase = ' -CATALOG_TYPE FITS_1.0 -CATALOG_NAME ' + \
                        outputCatalogue + \
@@ -814,8 +999,11 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
         keywords = keywordsbase + \
                    ' -CHECKIMAGE_TYPE "BACKGROUND,-BACKGROUND,SEGMENTATION" '\
                    +'-CHECKIMAGE_NAME "' + \
-                   bgMapPath + ',' + bgSubPath + ',' + segPath + '" -PHOT_APERTURES ' \
-                   + apStringPix # "', '" needed to interpret bgMApPAth etc as str
+                   bgMapPath + ',' + bgSubPath + ',' + segPath + '" ' + \
+                   '-PHOT_APERTURES ' + apStringPix + \
+                   ' -BACK_SIZE ' + str(back_size) + \
+                   ' -BACK_FILTERSIZE ' +str(back_filtersize)
+                   # "', '" needed to interpret bgMApPAth etc as str
 
 # with -CATALOG_TYPE FITS_1.0, the input parameter settings are saved in the header.
 # NOTE: the fits option can't handle array outputinformation such as MAG APER, FLUX RADIUS if more than one value! - SE for Dummies 
@@ -828,6 +1016,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
 
             print(command)
             os.system(command)
+
         else:
             print(f"The SEG and/or BG subtracted map exist at: {segPath, bgSubPath} \n")
 
@@ -853,12 +1042,12 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', apDiametersAS=np.
             field = 'NONE'
 
         print("aperture_photometry_blank is running")
-        # if aperphotfile doesn't exist, call ap phot blank - the output fits is aperphotfile
-        # TODO: aperture_photometry_blank(bgSubPath, segPath, whtPath, apDiametersAS, gridSeparation = gridSepPixels, clean = True, outputFitsName = aperPhotFile, imageDir = imageDir, field = field, overwrite = overwrite)
+        # if aperphotfile doesn't exist, call ap phot blank - outputFitsName is aperPhotFile
+        aperture_photometry_blank(bgSubPath, segPath, whtPath, apDiametersAS, gridSeparation = gridSepPixels, clean = True, outputFitsName = aperPhotFile, imageDir = imageDir, field = field, overwrite = overwrite)
 
-    return
+    return bgMapPath, bgSubDict, segPath
 
-def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'], apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), dataDir=baseDir+'data/', outputDir='none', overwrite=False, ra_str='none', dec_str='none', verbose=True):
+def get_depths(fieldName, cutouts, size='none', back_size=32, back_filtersize=9, queue='none', reqFilters=['all'], apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), dataDir=baseDir+'data/', outputDir='none', overwrite=False, ra_str='none', dec_str='none', verbose=True, saveFig=True):
 
     # set the grid seperation in arcsec
     if fieldName == 'NIRSPEC':
@@ -890,6 +1079,10 @@ def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'],
 
     # loop through each filter
     # for the queue run, run each as a separate file...
+    
+    bgMapPaths = [] # used in bg_plotter
+    listBgSubDicts = [] # used in bg_plotter
+    segPaths = [] # used in bg_plotter
 
     for fi, filterName in enumerate(availableFilters):
         # define the images etc to send through
@@ -927,7 +1120,12 @@ def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'],
                 jj = (filterName == stripFilt)
                 if np.any(jj):
                     strips = True 
-            image_depth(imageDir+imageName, zeropoint, cutouts=cutouts, size=size, whtPath=imageDir+whtName, whtType=whtType, outputDir=outputDir, strips=strips, filterName=filterName, overwrite=overwrite, mask=maskName, gridSepAS=gridSepAS, apDiametersAS=apDiametersAS)
+            bgMapPath, bgSubDict, segPath = image_depth(imageDir+imageName, zeropoint, cutouts=cutouts, size=size, back_size=back_size, back_filtersize=back_filtersize, whtPath=imageDir+whtName, whtType=whtType, outputDir=outputDir, strips=strips, filterName=filterName, overwrite=overwrite, mask=maskName, gridSepAS=gridSepAS, apDiametersAS=apDiametersAS)
+
+            # used in bg_plotter
+            bgMapPaths.append(bgMapPath) 
+            listBgSubDicts.append(bgSubDict)
+            segPaths.append(segPath)
 
         else:
             strips = "False"
@@ -973,6 +1171,7 @@ def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'],
 
     subsetPaths = open_cats(catPaths, open_subset=True, overwrite=True)
     cutoutPaths = [] # selection of files that will be passed to detections_fig() (i.e. excl wht files)
+    whtPaths = []    
     badMags = [] # all detections/bad_mag measurements
 
     for subsetPath in subsetPaths:
@@ -989,7 +1188,18 @@ def get_depths(fieldName, cutouts, size='none',queue='none', reqFilters=['all'],
                 badMags.append(badMag)
                 print(f"{filt}-bad-proportion: ", badMag, "%")
 
-    detections_fig(cutoutPaths=cutoutPaths, catPaths=catPaths, subsetPaths=subsetPaths, badMags=badMags, verbose=verbose)
+    for subsetPath in subsetPaths:
+        for filt in reqFilters:
+            subpattern = (rf"{baseDir}depths/catalogues/d{size}{filt}_cutout_subset\.fits")
+            if re.fullmatch(subpattern, subsetPath):
+                catPath = f"{baseDir}depths/catalogues/d{size}{filt}_cutout.fits"
+                whtPath = f"{baseDir}data/COSMOS/cutouts/UVISTA_{filt}_DR6_wht_{ra_str}_{dec_str}_size{size}.fits" # corresponds to the catalogue and subset catalogue
+                whtPaths.append(whtPath)
+
+    detections_fig(cutoutPaths=cutoutPaths, catPaths=catPaths, subsetPaths=subsetPaths, badMags=badMags, saveFig=saveFig, overwrite=overwrite, verbose=verbose)
+
+    bg_plotter(cutoutPaths=cutoutPaths, bgMapPaths=bgMapPaths, listBgSubDicts=listBgSubDicts, badMags=badMags, segPaths=segPaths, whtPaths=whtPaths, saveFig=saveFig, overwrite=overwrite, verbose=verbose)
+
 
     return
     
