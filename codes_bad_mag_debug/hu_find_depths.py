@@ -24,7 +24,8 @@ baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'
 
 fields = ['COSMOS']
 # 'Y', 'J', 'H', 'K', 'JH', 'HK'
-reqFilters = ['Ks', 'HKs']  # <<<<<<<<<< may want to change 
+# 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y'
+reqFilters = ['Y', 'J', 'H', 'K', 'JH', 'HK', 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y']  # <<<<<<<<<< may want to change 
 size_arcsec = 'full_size' # <<<<<<<<<< may want to change 
 saveFig = True            # <<<<<<<<<< may want to change 
 
@@ -40,7 +41,7 @@ overwrite = False # bc full-size result files are so large and time-consuming to
 # required aperture diameters to run through
 # change at your peril!
 apDiametersAS = np.array([1.0, 1.8, 2.0, 3.0, 4.0])
-
+apDiametersAS = np.array([1.8])
 ########## Function call #######################################################
 print("hu_find_depths.py run at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -57,7 +58,11 @@ if size_arcsec == 'full_size':
         dataDir = os.path.join(baseDir, 'data/COSMOS')
         for file_ in os.listdir(dataDir):
                 pattern = f"UVISTA_{filt}_DR6.fits"
+                HSCpattern = f"{filt}_DR3.fits"
                 if file_ == pattern:
+                    imagePath = os.path.join(dataDir, file_)
+                    imagePaths.append(imagePath)
+                elif file_ == HSCpattern:
                     imagePath = os.path.join(dataDir, file_)
                     imagePaths.append(imagePath)
                 whtpattern = f"UVISTA_{filt}_DR6_wht.fits"

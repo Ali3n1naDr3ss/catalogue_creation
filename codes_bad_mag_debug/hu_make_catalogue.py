@@ -11,7 +11,9 @@ Modified: from nake_catalogue.py 19/08/2025
 
 ###################### Import useful modules #########################
 import numpy as np
+from datetime import datetime
 from hu_catalogue_codes import *
+from joblib import Parallel, delayed
 
 se = True           # run source extractor in dual image mode
 check = False       # check all the catalogues have been run and have the same length
@@ -21,11 +23,14 @@ zptshift = False    # correct the zeropoints slightly (as derived from NA fittin
 combine = False     # combine 123 regions into one big catalogue, removing duplicates
 
 ######################### Set-up ####################################
-detectionFilters = ['JH', 'J']
+detectionFilters = ['Y', 'J', 'H', 'K', 'JH', 'HK', 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y']
+
 fields = ['COSMOS']
 
 # which filters to include in dual image mode
-reqFilters = ['J', 'Y', 'Ks', 'H', 'HSC-G_DR3', 'HSC-R_DR3', 'HSC-I_DR3', 'HSC-Z_DR3', 'HSC-Y_DR3']
+reqFilters = ['Y', 'J', 'H', 'K', 'JH', 'HK', 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y']
+
+n_jobs = len(detectionFilters)
 # either set this to ['all'] to run all filters present in images.lis
 
 # required aperture diameter
@@ -78,7 +83,7 @@ for ff, fieldName in enumerate(fields):
 
     for df, detectionFilt in enumerate(detectionFilters):
         if se:
-            print("se = True", '\n')
+            print("Beginning se = True at: ",  datetime.now().strftime("%d/%m %H:%M:%S"), '\n')
             # call the catalogue making code
             run_source_extractor(fieldName, detectionFilt, apDiametersAS, queue = queue, memory = 7,reqFilters = reqFilters, IRACapDiametersAS = IRACapDiametersAS, overwrite = True)
         # do this twice for the ch1 and ch2 requires the selection catalogue done
@@ -87,67 +92,89 @@ for ff, fieldName in enumerate(fields):
         Calls run_se for each filter
         Calculates scaling between image pixels and physical sizes
         Runs SE is catalogue for filter does not exist """
-
 if se:
+    print("Finished se = True at: ",  datetime.now().strftime("%d/%m %H:%M:%S"), '\n')
     exit()
-        
-## second do the masking
-for ff, fieldName in enumerate(fields):
-    
-    print('#############################################')
-    print("Analysing field ", fieldName)
-    
-    for df, detectionFilt in enumerate(detectionFilters):
 
-        if check:
-            print("check = True", '\n')
-            # check everything is in place
-            check_all_files(fieldName, detectionFilt)
-            """Check cats exist and if their size is as large as expected."""
-        
-        # next combine the required columns together
-        #       requiredCats = ['FLUX_RADIUS']
-        #       requiredSpit = ['NONE']
-        if mask:
-            print("mask = True", '\n')
-            combine_cats(fieldName, detectionFilt, requiredCats, requiredSpit = requiredSpit)#, 'FLUX_RADIUS'
-            #exit()
-            
-            # and then mask
-            for ai, apD in enumerate(requiredCats):
-                
-                #            if ai < 3:
-                #                continue
-                
-                if requiredSpit[ai] == 'NONE':
-                    spitstring = ''
-                    optstring = apD
-                else:
-                    spitstring = '_IRAC{0}as'.format(requiredSpit[ai]) # Spitzer
-                    optstring = '{0}as'.format(apD)
-                    
-                inputCat = baseDir + 'data/catalogues/{1}/det_{0}/{1}_DR2_UNMASKED_{0}_{2}{3}.fits'.format(detectionFilt, fieldName, optstring, spitstring)
-                #inputCat = '../catalogues/XMM1/det_HSC-G/XMM1_DR2_MASKED_HSC-G_1.8as_206testpsf_UNMASKED.fits'
-                print(inputCat)
-                #outputTable = '../catalogues/XMM1/det_HSC-G/XMM1_DR2_MASKED_HSC-G_1.8as_206testpsf_masked.fits'
-                apply_mask(inputCat, fieldName, save = True, hsc=True)
-                
-                # now cut the catalogue by vista edges
-                inputCat = baseDir + 'data/catalogues/{1}/det_{0}/{1}_DR2_MASKED_{0}_{2}{3}.fits'.format(detectionFilt, fieldName, optstring, spitstring)
-                apply_mask(inputCat, fieldName, save = True, hsc=True, cutband='Ks')
-                
-                if detectionFilt != 'Ks':
-                    # also mask by whether the detection filter is there or not!
-                    inputCat = baseDir + 'data/catalogues/{1}/det_{0}/{1}_DR2_MASKVISTA_{0}_{2}{3}.fits'.format(detectionFilt, fieldName, optstring, spitstring)
-                    apply_mask(inputCat, fieldName, save = True, cutband = detectionFilt, hsc=True)
-            print("masking finished")
-                    
+def run_masking(fields, detectionFilters, requiredCats, requiredSpit,
+                baseDir='/raid/scratch/hullyott/cataloguing/DepthsTestDir/',
+                check=True, mask=True, n_jobs=n_jobs):
+
+    jobs = []  # for parallel apply_mask calls
+
+    for ff, fieldName in enumerate(fields):
+        print('#############################################')
+        print("Analysing field ", fieldName)
+
+        for df, detectionFilt in enumerate(detectionFilters):
+
+            if check:
+                print("check = True", '\n')
+                # check everything is in place
+                check_all_files(fieldName, detectionFilt)
+
+            if mask:
+                print("mask = True", '\n')
+                combine_cats(fieldName, detectionFilt, requiredCats,
+                             requiredSpit=requiredSpit,
+                             imageDir=baseDir + 'data/')
+
+                # Now collect all apply_mask jobs
+                for ai, apD in enumerate(requiredCats):
+                    if requiredSpit[ai] == 'NONE':
+                        spitstring = ''
+                        optstring = apD.replace('.','_')
+                        
+                    else:
+                        requiredSpit[ai].replace('.','_')
+                        spitstring = '_IRAC{0}as'.format(requiredSpit[ai])
+                        optstring = '{0}as'.format(apD.replace('.','_'))
+
+                    # 1st: unmasked ? masked
+                    inputCat = (
+                        baseDir + 'data/catalogues/COSMOS/det_{0}/'
+                        'COSMOS_DR2_UNMASKED_{0}_{2}{3}.fits'
+                    ).format(detectionFilt, fieldName, optstring, spitstring)
+                    jobs.append(delayed(apply_mask)(inputCat, fieldName, save=True, hsc=True))
+
+                    # 2nd: apply K cut
+                    inputCat = (
+                        baseDir + 'data/catalogues/COSMOS/det_{0}/'
+                        'COSMOS_DR2_MASKED_{0}_{2}{3}.fits'
+                    ).format(detectionFilt, fieldName, optstring, spitstring)
+                    jobs.append(delayed(apply_mask)(inputCat, fieldName, save=True, hsc=True, cutband='K'))
+
+                    # 3rd: if detection filter isn't K, also cut by detection filter
+                    if detectionFilt != 'K':
+                        inputCat = (
+                            baseDir + 'data/catalogues/COSMOS/det_{0}/'
+                            'COSMOS_DR2_MASKVISTA_{0}_{2}{3}.fits'
+                        ).format(detectionFilt, fieldName, optstring, spitstring)
+                        jobs.append(delayed(apply_mask)(inputCat, fieldName, save=True, cutband=detectionFilt, hsc=True))
+
+                print("masking jobs queued for", fieldName, detectionFilt)
+
+    # Run all masking jobs in parallel
+    if jobs:
+        print(f"Running {len(jobs)} masking jobs in parallel with n_jobs={n_jobs}...")
+        results = Parallel(n_jobs=n_jobs, verbose=10)(jobs)
+        return results
+
+    return None
+
+if mask:
+    print("Beginning mask = True at: ",  datetime.now().strftime("%d/%m %H:%M:%S"), '\n')
+    results = run_masking(
+    fields, detectionFilters, requiredCats, requiredSpit,
+    baseDir='/raid/scratch/hullyott/cataloguing/DepthsTestDir/',
+    check=True, mask=True, n_jobs=n_jobs)  
                 
 if check | mask:
     exit()    
     
 # Fluxes!
 if fluxes:
+    print("Beginning fluxes = True at: ",  datetime.now().strftime("%d/%m %H:%M:%S"), '\n')
     print("fluxes = True", '\n')
     if detectionFilt != 'Ks':
         catString = 'DR2_MASKVISTADET_'
@@ -156,7 +183,8 @@ if fluxes:
 
   #  XMM1_DR2_MASKED_HSC-G_1.8as_206testpsf.fits
         
-    spawn_flux_errors(detectionFilters, fields, requiredCats, requiredSpit, queue = queue, catString = catString)
+    spawn_flux_errors(detectionFilters, fields, requiredCats, requiredSpit, queue = queue, catString = catString, short_test=False)
+print("Finished fluxes = True at: ",  datetime.now().strftime("%d/%m %H:%M:%S"), '\n')
 """
 HOLLY 28/03/25
 Uses SE python module, circle_sum, to perform aperture 

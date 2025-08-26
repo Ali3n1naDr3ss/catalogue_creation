@@ -1,5 +1,7 @@
-import numpy as np
 import os
+import numpy as np
+from datetime import datetime
+from joblib import Parallel, delayed
 from astropy.table import Table, Column, hstack, join, vstack, MaskedColumn
 
 baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'
@@ -921,10 +923,12 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
     """    
 
     print("Running apply_mask: ", '\n')
+
     from astropy.table import Table #, Column, hstack
     import astropy.io.fits as fits
     from astropy import units as u
     import numpy as np
+
     tb = Table.read(inputCatalogue)
     #tb = Table.read(inputCatalogue)
     raData = np.array(tb['RA'].quantity)
@@ -943,7 +947,7 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
     else:
         print("No ", inputFile, " file exists!  Exiting...")
         exit()
-        
+
     imagedata = Table.read(inputFile, format = 'ascii.commented_header')
 #    imagedata = imagedata[2:3]
     
@@ -974,8 +978,8 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
             print("new file assigned: ", newFile)
             
     elif (save == True) and (cutband != 'none'):
-        if cutband == 'Ks':
-        #if cutband == 'K':
+        #if cutband == 'Ks':
+        if cutband == 'K':
             kk = inputCatalogue.find('MASKED')
             if kk > 0:
                 newFile = inputCatalogue[:kk] + inputCatalogue[kk:kk+4] + 'VISTA' + inputCatalogue[kk+6:]
@@ -999,7 +1003,6 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
         # exit code
         exit()
 
-
     if cutband != 'none':
 
         # cut according to a given filter!
@@ -1008,7 +1011,13 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
         #print(maskFile)
 
         # check xy!
-        kk = maskFile[0].find('xy')
+        if len(maskFile) == 0:
+            print(f"No mask file found for cutband {cutband}")
+        else:
+            kk = maskFile[0].find('xy')
+            if kk != -1:
+                print("Mask filename contains 'xy'")
+
         if kk > 0:
             tokeep = mask_column(tb['X_IMAGE'], tb['Y_IMAGE'], regDir + maskFile[0], tokeep = True, xy= True)
         else:
@@ -1480,8 +1489,9 @@ def combine_cats(field, detFilt, catalogueTypes, apDiametersAS = [1.8, 2.0, 3.0,
     print("The available filters are ", availableFilters)
     
     ############################################################
+    
     catDir = imageDir + 'catalogues/'
-    indiDir = catDir + '{1}/det_{0}/'.format(detFilt, field)
+    indiDir = catDir + 'COSMOS/det_{0}/'.format(detFilt)
     
     ## Base table, make a basic table from the detection catalogue
     seCatalogue = indiDir + 'd' + detFilt + '_m' + detFilt + '.fits'
@@ -1961,13 +1971,17 @@ def run_se(detFilt, filterName, imagedata, apDiametersAS, inputSex, dirHere, ass
     print("run_se finished", '\n')
     return outputCat
 
-def spawn_flux_errors(detectionFilters, fields, requiredCats, requiredSpit, catString = 'DR2_MASKVISTA_', queue = 'none', memory = 6):
-    
+def spawn_flux_errors(
+    detectionFilters, fields, requiredCats, requiredSpit,
+    catString='DR2_MASKVISTA_', queue='none', memory=6, n_jobs=12, short_test=False):
+
+    n_jobs = len(detectionFilters)
+    jobs = []  # list to hold flux_errors jobs for parallel execution
+
     for ff, fieldName in enumerate(fields):
-        
         print('#############################################')
         print("Fluxes/errors for field ", fieldName)
-        
+
         for df, detectionFilt in enumerate(detectionFilters):
             print('For det filter ', detectionFilt)
 
@@ -1977,50 +1991,61 @@ def spawn_flux_errors(detectionFilters, fields, requiredCats, requiredSpit, catS
 
                 if requiredSpit[ai] == 'NONE':
                     spitstring = ''
-                
+
                 if apD != 'MAG_AUTO':
-                    inputCat = '/raid/scratch/data/catalogues/{1}/det_{0}/{1}_{4}{0}_{2}{3}.fits'.format(detectionFilt, fieldName, optstring, spitstring, catString)
-                    print(inputCat)
-          #          exit()
+                    inputCat = (
+                        '/raid/scratch/hullyott/cataloguing/DepthsTestDir/data/catalogues/COSMOS/det_{0}/{1}_{4}{0}_{2}{3}.fits').format(detectionFilt, fieldName, optstring, spitstring, catString)
+
                     if os.path.isfile(inputCat):
                         if queue == 'none':
-                            print('Running in series...')
-
+                            # Local parallel execution
                             if requiredSpit[ai] == 'NONE':
                                 stringSpit = 'NONE'
                             else:
                                 stringSpit = float(requiredSpit[ai])
-                                
-                            fluxName = flux_errors(inputCat, fieldName, IRACapertureAS = stringSpit, outputType = 'fits', verbose = False, inputDirProvided = True, removeCoadds= True)
-          #                  exit()
+
+                            jobs.append(
+                                delayed(flux_errors)(
+                                    inputCat, fieldName,
+                                    IRACapertureAS=stringSpit,
+                                    outputType='fits',
+                                    verbose=False,
+                                    inputDirProvided=True,
+                                    removeCoadds=True))
+
                         else:
+                            # Queue submission mode
                             print('Spawning in the queue ')
-                            tmpName = 'tmp_myfile_{0}_{1}_{2}{3}'.format(detectionFilt,fieldName, optstring, spitstring)
-                            f = open(tmpName + '.sh', 'w')
-                            f.write('#!/bin/bash\n')
-                            if requiredSpit[ai] == 'NONE':
-                                spitstringfloat = 'NONE'
-                            else:
-                                spitstringfloat = float(requiredSpit[ai])
-                            f.write('python3 stupid_flux.py {0} {1} {2}'.format(inputCat, fieldName, spitstringfloat))
-                            
-                            f.close()
-                            # make executable
+                            tmpName = 'tmp_myfile_{0}_{1}_{2}{3}'.format(
+                                detectionFilt, fieldName, optstring, spitstring
+                            )
+                            with open(tmpName + '.sh', 'w') as f:
+                                f.write('#!/bin/bash\n')
+                                if requiredSpit[ai] == 'NONE':
+                                    spitstringfloat = 'NONE'
+                                else:
+                                    spitstringfloat = float(requiredSpit[ai])
+                                f.write(
+                                    'python3 stupid_flux.py {0} {1} {2}\n'.format(
+                                        inputCat, fieldName, spitstringfloat))
+
+                            # make executable and submit
                             os.system('chmod +x ' + tmpName + '.sh')
                             command = "addqueue -c '{1}' -m {2} -q {0} -d ./{1}.sh".format(queue, tmpName, memory)
                             os.system(command)
-                            
-                            
-                        
+
                     else:
                         print('Input cat does not exist = ', inputCat)
-                        
-            
-            
+
+    # Run local jobs in parallel if any
+    if queue == 'none' and jobs:
+        print(f"Running {len(jobs)} flux_errors jobs in parallel with n_jobs={n_jobs} at ", datetime.now().strftime("%d/%m %H:%M:%S"))
+        results = Parallel(n_jobs=n_jobs, verbose=10)(jobs)
+        return results
+
+    return None
     
-    return
-    
-def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', overwrite = False, minError = 10.0, psfType = 'peak', minErrorIRAC = 10.0, IRACapertureAS = 2.8, depthType = 'grid', depths = [], provFilters = [], outputType = 'fits', verbose = False, inputDirProvided = False, removeCoadds = True, checkFile = 'none', microJyYes = True, xyName = ['X_IMAGE', 'Y_IMAGE'], badFilters = np.array(['NB118']), xmmflag = ['NONE'], countsKey = 'flux_'):
+def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/data/', overwrite = False, minError = 10.0, psfType = 'peak', minErrorIRAC = 10.0, IRACapertureAS = 2.8, depthType = 'grid', depths = [], provFilters = [], outputType = 'fits', verbose = False, inputDirProvided = False, removeCoadds = True, checkFile = 'none', microJyYes = True, xyName = ['X_IMAGE', 'Y_IMAGE'], badFilters = np.array(['NB118']), xmmflag = ['NONE'], countsKey = 'flux_', short_test=False):
     
     """ A function version of my flux errors code.
         
@@ -2043,7 +2068,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
     import os
     import time
     from astropy.table import Table, hstack, Column
-    from new_depth_codes import local_depths, grid_depths, grid_psf
+    from hu_depth_codes import local_depths, grid_depths, grid_psf
     
     #################################################################
     # Read in the image info etc as before
@@ -2109,9 +2134,10 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
     inputTableLocation = inputTableFile
     
     tb = Table.read(inputTableLocation)
-    
-    #print('Testing on short cat!')
-    #tb = tb[np.random.randint(len(tb), size = (50))]
+
+    if short_test:
+        print('Testing on short cat!')
+        tb = tb[np.random.randint(len(tb), size = (50))]
     
     #checkFile = '{0}_delete_check_random1000.fits'.format(fieldName)
 
@@ -2206,14 +2232,14 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
     ##############################################################################
     # Define the aperture correction and local depth files
     if fieldName[0:3] == 'XMM':
-        psfDir = 'raid/scratch/' + 'psf/{0}/enclosedflux/'.format('XMM')
+        psfDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/' + 'psf/{0}/enclosedflux/'.format('XMM')
     elif fieldName[0:4] == 'CDFS':
-        psfDir = '/raid/scratch/' + 'psf/{0}/enclosedflux/'.format('CDFS')
+        psfDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/' + 'psf/{0}/enclosedflux/'.format('CDFS')
     else:
-        psfDir = '/raid/scratch/' + 'psf/{0}/enclosedflux/'.format(fieldName)
+        psfDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/' + 'psf/{0}/enclosedflux/'.format(fieldName)
 
     print('Enclosed flux is coming from directory:', psfDir)
-    depthDir = '/raid/scratch/depths/' '{0}/phot/'.format(fieldName)
+    depthDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/COSMOS/phot/' #TODO: check this dir is correct fo rfincal run
   
 ## read in enclosed flux stuff
 #efFile = 'psf/final_enclosedFlux_Oct17.lis'
@@ -2287,8 +2313,8 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
             
             ## Read in a pre-prepared table of depth values
             ## find the closest
-            if "K" in filterName:
-                filterName = filterName.split('K')[0] + 'Ks'
+            #if "K" in filterName:
+                #filterName = filterName.split('K')[0] + 'Ks'
             depthTableFile = depthDir + filterName +'_' + apStringHere + 'as_gridDepths{0}.fits'.format(gridString)
             if 'CFHT' in depthTableFile:
                 continue
@@ -2472,6 +2498,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
             else:
                 # read in peak file
                 psfTableFile = psfDir + filterName  + '_peak.txt'
+                print("psfTableFile",psfTableFile)
 
                 # Note from Rohan: reading in the median of the PSFs in CDFS1,2,3. So this will only work when running on CDFS.
                 # I'll turn it off after using it!!
@@ -2479,7 +2506,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
                 if 'CFHT' in filterName:
                     continue
                 encflux = Table.read(psfTableFile, format = 'ascii.commented_header')
-                print(encflux)
+                print("encflux: ",encflux)
                 # extract the right apd
                 ii = (encflux['apD'] > apertureSize-0.01) & (encflux['apD'] < apertureSize+0.01)
 
@@ -2564,7 +2591,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
                 enclosedFlux = aperture_correction(psfTable, apStringHere, x, y)
                 toc = time.time()
                 print("The time to do the enclosed flux is {:4f} seconds. ".format(toc-tic))
-        #print "The enclosed flux is ", enclosedFlux
+        print("The enclosed flux is ", enclosedFlux)
             
         #if filterName == 'Y':
         #    enclosedFlux[:] = 67.2
@@ -2592,6 +2619,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
         ## Check that the object is covered by this data set, using the flag
     ## in the magnitudes
         valuesToMask = np.where(tb[filterName] < -90.0)
+        # if magnitude is measured as <-90, mask over it 
         
     ## Convert to fluxes and errors in good units!
         if microJyYes:
@@ -2599,8 +2627,8 @@ def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/data/', over
                                                       zeropoint, microJy = True, \
                                                       enclosedFlux = enclosedFlux, \
                                                       minErrorPercent = minErrorHere)
-            
-            fluxMicroJy[valuesToMask[0]] = -99.0
+            fluxMicroJy[valuesToMask[0]] = -99.0 
+            # assign a mask value to measured magnitudes <-90
             errorMicroJy[valuesToMask[0]] = -99.0
             
     ## add to table
@@ -3209,18 +3237,20 @@ def flux_conv(fluxCounts, fiveSigmaArray, zpt, microJy = True, cgs = False, minE
         print('NANS found here in fiveSigma array')
         exit()
         
-    rem = fiveSigmaArray < 1.0
+    rem = fiveSigmaArray < 1.0 # if any of the elements in 5sigArr<1, True
+
     fiveSigmaArray_allPositive = fiveSigmaArray
     if np.any(rem):
-        fiveSigmaArray_allPositive[rem] = 1.0
+        fiveSigmaArray_allPositive[rem] = 1.0 # if any element is rem, assign 1
+        print("reassigned depth array element to 1 ", fiveSigmaArray_allPositive[rem])
     
     if microJy:
         # simply convert flux counts into microJy
+        print("zpt, fluxCounts: ", zpt, fluxCounts)
         fluxFinal = 3631000000.0*(10**(-zpt/2.5))*fluxCounts.squeeze()
-        
+        print("fluxFinal ", fluxFinal)
         # now convert the five sigma array into fluxes
         errorArray_allPositive = 726200000.0*(10**(-fiveSigmaArray/2.5))
-        
         
     if cgs:
         # convert to cgs!
@@ -3230,24 +3260,29 @@ def flux_conv(fluxCounts, fiveSigmaArray, zpt, microJy = True, cgs = False, minE
         # and the five sigma array
         value = -(48.6 + fiveSigmaArray)/2.5
         errorArray_allPositive = 0.2*(10**value)
-    
-    
+
     ##print fluxCounts
     # Check that the minimum error is in place
     if minErrorPercent > 0.0:
+        print("minErrorPercent > 0.0 ",  minErrorPercent)
+        print("errorArray_allPositive: ", errorArray_allPositive)
         tooSmall = errorArray_allPositive < (minErrorPercent/100.0)*fluxFinal.squeeze()
         if np.any(tooSmall):
+            print("too small: True ",errorArray_allPositive[tooSmall])
             errorArray_allPositive[tooSmall] = (minErrorPercent/100.0) * fluxFinal.squeeze()[tooSmall]
+            print("too small: True ",errorArray_allPositive[tooSmall])
 
     errorFinal = errorArray_allPositive
     if np.any(rem):
+        print("rem=yes", errorFinal[rem])
         errorFinal[rem] = -99.0
-    
-    # 
 
     ## correct for the enclosed flux!
     fluxFinal = fluxFinal*100.0/enclosedFlux
     errorFinal = errorFinal*100.0/enclosedFlux
+    print("enclosedFlux!!!",enclosedFlux)
+    print(fluxFinal)
+    print(errorFinal)
     
     return fluxFinal, errorFinal
 
@@ -3574,5 +3609,4 @@ def compare_plot_phot(inputCat, filterA = 'NONE', filterB = 'NONE', radiusCat = 
     plotname = outputDir + '{0}_{1}.png'.format(filterA, filterB)
     fig.savefig(plotname)
     print(plotname)
-    print("compare_phot line 3056 finished", '\n')
     return
