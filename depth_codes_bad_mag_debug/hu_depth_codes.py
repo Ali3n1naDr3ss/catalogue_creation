@@ -7,8 +7,10 @@ from astropy.io import fits
 from datetime import datetime
 from astropy.table import Table
 import matplotlib.pyplot as plt
+from joblib import Parallel, delayed
 from matplotlib.ticker import ScalarFormatter
 from astropy.visualization import ZScaleInterval
+
 
 # make cutours (optional)
 # get_depths
@@ -299,75 +301,7 @@ def make_cutout(filters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=Tr
 
 ######################## Plotting and Figures ##################################################
 
-def detections_fig_3by2(cutoutPaths, catPaths, subsetPaths, verbose=True):
-    """ 
-    Makes a figure showing the science image, detections,
-    and subset detections for two filters in a 3x2 formation. 
-    Ready-made subsets should be passed to this function. 
-
-    cutoutPaths(list[str]):     A list of paths to the science cutouts you want to show e.g. 
-                                raid/scratch/hullyott/cataloguing/DepthsTestDir/data/COSMOS/cutouts/
-                                UVISTA_J_DR6_1495_22_size500.fits
-
-    catPaths(list[str]):        A list of paths to the detections catalogues made in the cutout regions
-                                e.g. /raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/
-                                d500JH_cutout.fits
-
-    subsetPaths(list[str]):     A list of paths to the subsets of detections made in the cutout regions
-                                e.g. /raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/catalogues/
-                                d500JH_cutout_subset.fits
-    """
-    import matplotlib
-    matplotlib.use("TkAgg")  # or "QtAgg"
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import ScalarFormatter
-    from astropy.visualization import ZScaleInterval
-
-    ### initialise fig
-    fig, axes = plt.subplots(2, 3, figsize=(12, 8))
-    zscale = ZScaleInterval() # z-scale all images
-    formatter = ScalarFormatter(useMathText=False)
-    formatter.set_scientific(False)
-    formatter.set_useOffset(False)
-
-    for i, cutoutPath in enumerate(cutoutPaths):
-        cutPlotTitle = os.path.basename(cutoutPath)
-        cutoutData, _, _ = get_fits_data(cutoutPath, verbose=verbose)
-        vmin, vmax = zscale.get_limits(cutoutData)
-        ax = axes[i, 0]
-        ax.imshow(cutoutData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-        ax.set_title(f"{cutPlotTitle}", fontsize=10)
-        ax.xaxis.set_major_formatter(formatter)
-        ax.axis('off')
-
-    for i, catPath in enumerate(catPaths):
-        catPlotTitle = os.path.basename(catPath)
-        catTable = Table.read(catPath)
-        ra = catTable['ALPHA_J2000']
-        dec = catTable['DELTA_J2000']
-        ax_cat = axes[i, 1]
-        ax_cat.scatter(ra, dec, color='blue', alpha=0.5, s=1)
-        ax_cat.set_title(f"{catPlotTitle}", fontsize=10)
-        ax_cat.xaxis.set_major_formatter(formatter)
-        ax_cat.invert_xaxis()  # invert RA axis to match sky convention
-        ax_cat.grid(True)
-
-    for i, subsetPath in enumerate(subsetPaths):
-        subsetPlotTitle = os.path.basename(subsetPath)
-        subsetTable = Table.read(subsetPath)
-        ra = subsetTable['ALPHA_J2000']
-        dec = subsetTable['DELTA_J2000']
-        ax_sub = axes[i, 2]
-        ax_sub.scatter(ra, dec, color='green', alpha=0.5, s=1)
-        ax_sub.set_title(f"{subsetPlotTitle}", fontsize=10)
-        ax_sub.xaxis.set_major_formatter(formatter)
-        ax_sub.invert_xaxis()  # invert RA axis to match sky convention
-        ax_sub.grid(True)
-
-    plt.subplots_adjust(hspace=0.4, wspace=0.3)
-    plt.show()
-
-def detections_fig(imagePaths, catPaths, subsetPaths, badMags,saveFig=True, overwrite=True, verbose=True):
+def detections_fig(imagePaths, catPaths, subsetPaths, badMags, saveFig=True, overwrite=True, show_fig=False, verbose=True):
     """ 
     Makes a figure showing the science imagea and measurements,
     overlayed by subset detections for two filters in a 2x2 formation. 
@@ -387,232 +321,253 @@ def detections_fig(imagePaths, catPaths, subsetPaths, badMags,saveFig=True, over
 
     badMags(float):             Percentage of bag-mag detections within region. bad-mag == MAG_APER[1]>50
     """
-
+    import math
     import matplotlib
     matplotlib.use("TkAgg")  # or "QtAgg"
     import matplotlib.pyplot as plt
 
+    if any('cutout' in path for path in imagePaths):
+        full_size = False
+    else:
+        full_size = True
+        step = 1
+
+    rows_per_fig = 3  
+
+    # split imagePaths etc. into chunks of 3
+    n_batches = math.ceil(len(imagePaths) / rows_per_fig)
+
+    for batch_idx in range(n_batches):
+        start = batch_idx * rows_per_fig
+        end = start + rows_per_fig
+        
+        # slice the relevant chunk of data
+        image_chunk   = imagePaths[start:end]
+        subset_chunk  = subsetPaths[start:end]
+        badMag_chunk  = badMags[start:end]
+        cat_chunk     = catPaths[start:end]
+        subsetC_chunk = subsetPaths[start:end]
+
+        # initialise fig for this batch
+        fig, axes = plt.subplots(
+            nrows=len(image_chunk), ncols=2, figsize=(12, 4*len(image_chunk))
+        )
+        axes = np.atleast_2d(axes)   # always 2D for indexing
+        axes = axes.reshape(-1, 2)
+
+        #axes = np.atleast_2d(axes)  # forces 2D indexing
+        axes = axes.reshape(-1, 2)  # force (nrows, 2) shape
+        zscale = ZScaleInterval() # z-scale all images
+        formatter = ScalarFormatter(useMathText=False)
+        formatter.set_scientific(False)
+        formatter.set_useOffset(False)
+
+        print("\n>>>>>>> Getting data for detections figures. May take a few mins. Started at: ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+        for i, (imagePath, subsetPath, badMag) in enumerate(zip(image_chunk, subset_chunk, badMag_chunk)):
+            imagePlotTitle = os.path.basename(imagePath).replace('.fits', '')
+            if 'cutout' in os.path.basename(subsetPath):
+                subsetPlotTitle = os.path.basename(subsetPath).replace('_cutout_subset.fits', 'Mag>50')
+            else:
+                subsetPlotTitle = os.path.basename(subsetPath).replace('_subset.fits', 'Mag>50')
+
+            imageData, _, wcs = get_fits_data(imagePath, verbose=verbose)
+            if full_size:
+                imageData = imageData[::step, ::step] # make number of points manageable!
+            subsetTable = Table.read(subsetPath)
+            subRA = subsetTable['ALPHA_J2000']
+            subDec = subsetTable['DELTA_J2000']
+            # Convert RA/Dec -> pixel coordinates
+            x_pix, y_pix = wcs.world_to_pixel_values(subRA, subDec)
+
+            vmin, vmax = zscale.get_limits(imageData)
+            ax = axes[i, 0]
+            ax.imshow(imageData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax.set_title(f"{imagePlotTitle}", fontsize=10)
+            ax.scatter(x_pix, y_pix, color='red', alpha=0.5, s=1, label=subsetPlotTitle)
+            ax.legend(loc='lower left')
+            ax.grid(True)
+            ax.text(0.0,-50, f"MAG_APER[1]>50: {badMag}%", color='red')
+            ax.xaxis.set_major_formatter(formatter)
+            ax.set_xlabel("RA (deg)")
+            ax.set_ylabel("Dec (deg)")
+            ax.axis('off')
+
+        for i, (catPath, subsetPath) in enumerate(zip(cat_chunk, subsetC_chunk)):
+            catPlotTitle = os.path.basename(catPath)
+            if 'cutout' in catPath:
+                size = re.findall(r'\d+', catPlotTitle)[0]
+            subsetPlotTitle = os.path.basename(subsetPath)
+            catTable = Table.read(catPath)
+            subsetTable = Table.read(subsetPath)
+            ra = catTable['ALPHA_J2000']
+            dec = catTable['DELTA_J2000']
+            subRA = subsetTable['ALPHA_J2000']
+            subDec = subsetTable['DELTA_J2000']
+
+            ax_cat = axes[i, 1]
+            ax_cat.scatter(ra, dec, color='blue', alpha=0.5, s=1, label='all measurements')
+            ax_cat.scatter(subRA, subDec, color='red', alpha=0.5, s=1, label=subsetPlotTitle)
+            ax_cat.legend(loc='lower left')
+            ax_cat.set_title(f"{catPlotTitle}", fontsize=10)
+            ax_cat.xaxis.set_major_formatter(formatter)
+            ax_cat.invert_xaxis()  # invert RA axis to match sky convention
+            ax_cat.grid(True)
+
+        plt.subplots_adjust(hspace=0.4, wspace=0.3)
+        print("\n>>>>>>>> Saving detections figure... ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+        if saveFig and overwrite:
+            outDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/plots/'
+            if any('cutout' in path for path in subset_chunk):
+                outputPath = outDir + f"{batch_idx}_cutout_detections_badMags.png"
+            else:
+                outputPath = outDir + f"{batch_idx}_fullsize_detections_badMags.png"
+            try:
+                plt.savefig(outputPath, format='png', dpi=300, bbox_inches='tight')
+                plt.close()  # closes current figure
+                print(f"Figure saved as {outputPath}")
+            except PermissionError:
+                print(f"Error: Permission denied. Could not save the file {outputPath}.")
+            except Exception as e:
+                print(f"Error: Could not save the file {outputPath}. Reason: {e}")
+        if show_fig:   
+            print("\n>>>>>>>> Opening detections figure. ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            plt.show()
+
+def bg_plotter(imagePaths='none', bgMapPaths='none', listBgSubDicts='none', badMags='none', segPaths='none', whtPaths='none', show_bad_mags=False, saveFig=True, overwrite=True, show_fig=False, verbose=True):
+    """
+        Makes figure showing data, bg mpa, bg subtracted, and seg map.
+    """
+
     ### initialise fig
-    fig, axes = plt.subplots(nrows=len(imagePaths), ncols=2, figsize=(12, 8))
-    axes = np.atleast_2d(axes)  # forces 2D indexing
-    zscale = ZScaleInterval() # z-scale all images
-    formatter = ScalarFormatter(useMathText=False)
-    formatter.set_scientific(False)
-    formatter.set_useOffset(False)
+    ## file-save name, count number of cols needed 
+    import math
+    import matplotlib
+    matplotlib.use("TkAgg")  # or "QtAgg"
+    import matplotlib.pyplot as plt
 
-    print("\n>>>>>>> Getting data for detections figures. May take a few mins. Started at: ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    rows_per_fig = 3
+    n_batches = math.ceil(len(listBgSubDicts) / rows_per_fig)
 
-    for i, (imagePath, subsetPath, badMag) in enumerate(zip(imagePaths, subsetPaths, badMags)):
-        imagePlotTitle = os.path.basename(imagePath).replace('.fits', '')
-        if 'cutout' in os.path.basename(subsetPath):
-            subsetPlotTitle = os.path.basename(subsetPath).replace('_cutout_subset.fits', 'Mag>50')
-        else:
-            subsetPlotTitle = os.path.basename(subsetPath).replace('_subset.fits', 'Mag>50')
+    print("\n>>>>>>>>> Making background comparison figures. For large images, this can take a few mins. Started at: ",
+          datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-        imageData, _, wcs = get_fits_data(imagePath, verbose=verbose)
-        subsetTable = Table.read(subsetPath)
-        subRA = subsetTable['ALPHA_J2000']
-        subDec = subsetTable['DELTA_J2000']
-        # Convert RA/Dec -> pixel coordinates
-        x_pix, y_pix = wcs.world_to_pixel_values(subRA, subDec)
+    for batch_idx in range(n_batches):
+        start = batch_idx * rows_per_fig
+        end = start + rows_per_fig
 
-        vmin, vmax = zscale.get_limits(imageData)
-        ax = axes[i, 0]
-        ax.imshow(imageData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-        ax.set_title(f"{imagePlotTitle}", fontsize=10)
-        ax.scatter(x_pix, y_pix, color='red', alpha=0.5, s=1, label=subsetPlotTitle)
-        ax.legend(loc='lower left')
-        ax.grid(True)
-        ax.text(0.0,-50, f"MAG_APER[1]>50: {badMag}%", color='red')
-        ax.xaxis.set_major_formatter(formatter)
-        ax.set_xlabel("RA (deg)")
-        ax.set_ylabel("Dec (deg)")
-        ax.axis('off')
+        # slice chunks for this batch
+        bgSub_chunk  = listBgSubDicts[start:end]
+        image_chunk  = [] if imagePaths == 'none' else imagePaths[start:end]
+        bgMap_chunk  = [] if bgMapPaths == 'none' else bgMapPaths[start:end]
+        seg_chunk    = [] if segPaths == 'none' else segPaths[start:end]
+        wht_chunk    = [] if whtPaths == 'none' else whtPaths[start:end]
 
-    for i, (catPath, subsetPath) in enumerate(zip(catPaths, subsetPaths)):
-        catPlotTitle = os.path.basename(catPath)
-        if 'cutout' in catPath:
-            size = re.findall(r'\d+', catPlotTitle)[0]
-        subsetPlotTitle = os.path.basename(subsetPath)
-        catTable = Table.read(catPath)
-        subsetTable = Table.read(subsetPath)
-        ra = catTable['ALPHA_J2000']
-        dec = catTable['DELTA_J2000']
-        subRA = subsetTable['ALPHA_J2000']
-        subDec = subsetTable['DELTA_J2000']
+        # determine number of rows in this figure
+        nrows = len(bgSub_chunk)
 
-        ax_cat = axes[i, 1]
-        ax_cat.scatter(ra, dec, color='blue', alpha=0.5, s=1, label='all measurements')
-        ax_cat.scatter(subRA, subDec, color='red', alpha=0.5, s=1, label=subsetPlotTitle)
-        ax_cat.legend(loc='lower left')
-        ax_cat.set_title(f"{catPlotTitle}", fontsize=10)
-        ax_cat.xaxis.set_major_formatter(formatter)
-        ax_cat.invert_xaxis()  # invert RA axis to match sky convention
-        ax_cat.grid(True)
+        fig, axes = plt.subplots(nrows=nrows, ncols=5, figsize=(20, 4*nrows))
+        axes = np.atleast_2d(axes)  # always 2D
+        axes = axes.reshape(-1, 5)
+
+        zscale = ZScaleInterval()
+        formatter = ScalarFormatter(useMathText=False)
+        formatter.set_scientific(False)
+        formatter.set_useOffset(False)
+
+        for i in range(nrows):  # one row per BgSubDict
+            col_idx = 0
+
+            # plot cutout region
+            if imagePaths != 'none':
+                imagePath = image_chunk[i]
+                imagePlotTitle = os.path.basename(imagePath).replace('.fits', '')
+                imageData, _, _ = get_fits_data(imagePath, verbose=verbose)
+                vmin, vmax = zscale.get_limits(imageData)
+                ax = axes[i, col_idx]
+                ax.imshow(imageData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+                ax.set_title(imagePlotTitle, fontsize=10)
+                ax.xaxis.set_major_formatter(formatter)
+                ax.axis('off')
+                col_idx += 1
+
+            # plot bgmap
+            if bgMapPaths != 'none':
+                bgMapPath = bgMap_chunk[i]
+                bgMapPlotTitle = os.path.basename(bgMapPath).replace('.fits', '').replace('_cutout_', '')
+                bgMapData, header, _ = get_fits_data(bgMapPath, verbose=verbose)
+                vmin, vmax = zscale.get_limits(bgMapData)
+                ax_bgmap = axes[i, col_idx]
+                ax_bgmap.imshow(bgMapData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+                ax_bgmap.set_title(bgMapPlotTitle, fontsize=10)
+                ax_bgmap.xaxis.set_major_formatter(formatter)
+                ax_bgmap.axis('off')
+                col_idx += 1
+
+            # plot bgSub
+            if listBgSubDicts != 'none':
+                BgSubDict = bgSub_chunk[i]
+                bgSubPath = BgSubDict['Path']
+                bgSubName = os.path.basename(bgSubPath).replace('.fits', '').replace('_cutout_', ' ')
+                bgSubParams = f" BKSZ:{BgSubDict['back_size']} BKFILT:{BgSubDict['back_filtersize']}"
+                bgSubPlotTitle = bgSubName + bgSubParams
+                bgSubData, header, _ = get_fits_data(bgSubPath, verbose=verbose)
+                vmin, vmax = zscale.get_limits(bgSubData)
+                ax_bgsub = axes[i, col_idx]
+                ax_bgsub.imshow(bgSubData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+                ax_bgsub.set_title(bgSubPlotTitle, fontsize=10)
+                ax_bgsub.xaxis.set_major_formatter(formatter)
+                ax_bgsub.axis('off')
+                col_idx += 1
+
+            # plot segmentation maps
+            if segPaths != 'none':
+                segPath = seg_chunk[i]
+                segPlotTitle = os.path.basename(segPath).replace('.fits', '').replace('_cutout_', '')
+                segData, header, _ = get_fits_data(segPath, verbose=verbose)
+                vmin, vmax = zscale.get_limits(segData)
+                ax_seg = axes[i, col_idx]
+                ax_seg.imshow(segData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+                ax_seg.set_title(segPlotTitle, fontsize=10)
+                ax_seg.xaxis.set_major_formatter(formatter)
+                ax_seg.axis('off')
+                col_idx += 1
+
+            # plot weight maps
+            if whtPaths != 'none':
+                whtPath = wht_chunk[i]
+                whtPlotTitle = os.path.basename(whtPath).replace('.fits', '').replace('_cutout_', '')
+                whtData, header, _ = get_fits_data(whtPath, verbose=verbose)
+                vmin, vmax = zscale.get_limits(whtData)
+                ax_wht = axes[i, col_idx]
+                ax_wht.imshow(whtData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+                ax_wht.set_title(whtPlotTitle, fontsize=10)
+                ax_wht.xaxis.set_major_formatter(formatter)
+                ax_wht.axis('off')
+                col_idx += 1
 
     plt.subplots_adjust(hspace=0.4, wspace=0.3)
-    print("\n>>>>>>>> Saving detections figure... ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
+    # --- save each batch as its own file ---
     if saveFig and overwrite:
-        outDir = '/raid/scratch/hullyott/cataloguing/plots/'
-        if any('cutout' in path for path in subsetPaths):
-            outputPath = outDir + size + "arcsec" + "detections_badMags.png"
-        else:
-            outputPath = outDir + "fullsize_detections_badMags.png"
+        outDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/plots/'
+        outputPath = outDir + f"{figTitleSubstr}_batch{batch_idx}.png"
         try:
-            plt.savefig(outputPath, format='png', dpi=300, bbox_inches='tight')
-            plt.close()  # closes current figure
+            plt.savefig(outputPath, format='png', dpi=300)
             print(f"Figure saved as {outputPath}")
+            plt.close()
         except PermissionError:
             print(f"Error: Permission denied. Could not save the file {outputPath}.")
         except Exception as e:
             print(f"Error: Could not save the file {outputPath}. Reason: {e}")
 
-    if any('cutout' in path for path in imagePaths):
-        print("\n>>>>>>>> Opening detections figure. ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        plt.show()
-
-def bg_plotter(imagePaths='none', bgMapPaths='none', listBgSubDicts='none', badMags='none', segPaths='none', whtPaths='none', show_bad_mags=False, saveFig=True, overwrite=True, verbose=True):
-    """
-        
-    """
-
-    import matplotlib
-    matplotlib.use("TkAgg")  # or "QtAgg"
-    import matplotlib.pyplot as plt
-
-    ### initialise fig
-    ## file-save name, count number of cols needed 
-    ncols = 0
-    nrows=len(listBgSubDicts)
-
-    figTitleSubstr = []
-
-    if imagePaths!='none': # if you want to plot a science image... i.e. cutout or full-size
-        ncols += 1
-        figTitleSubstr.append("science")
-        for imagePath in imagePaths:
-            if any("cutout" in imagePath for imagePath in imagePaths):
-                figTitleSubstr.append("size" + size)
-            imageName = os.path.basename(imagePath).replace('fits','')
-            if 'size' in imageName:
-                size = imageName.split('size')[-1].replace('.', '')
-                size = size+'arcsec'
-                figTitleSubstr.append(size)
-            else:
-                if "full_size" not in figTitleSubstr:
-                figTitleSubstr.append("full_size")
-
-    if bgMapPaths!='none':
-        ncols += 1
-        figTitleSubstr.append("bgMap")
-
-    if listBgSubDicts!='none':
-        ncols += 1
-        figTitleSubstr.append("bgSub")
-
-    if segPaths!='none':
-        ncols += 1
-        figTitleSubstr.append("seg")
-
-    if whtPaths!='none':
-        ncols += 1
-        figTitleSubstr.append("wht")
-
-    figTitleSubstr = '_'.join(figTitleSubstr)
-
-    # dynamically adjust figure size
-    w, h = 4, 4 # choose base size per subplot (in inches)
-    fig, axes = plt.subplots(
-        nrows=nrows, ncols=ncols,
-        figsize=(ncols * w, nrows * h))
-
-    axes = np.atleast_2d(axes)  # forces 2D indexing
-
-    zscale = ZScaleInterval() # z-scale all images
-    formatter = ScalarFormatter(useMathText=False)
-    formatter.set_scientific(False)
-    formatter.set_useOffset(False)
-    
-    print("\n>>>>>>>>> Getting data for background Figure. May take a few mins. Started at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), '\n')    
-
-    for i in range(len(listBgSubDicts)):  # one row per BgSubDict
-        col_idx = 0
-
-        # plot cutout region
-        if imagePaths != 'none':
-            imagePath = imagePaths[i]
-            imagePlotTitle = os.path.basename(imagePath).replace('.fits', '')
-            imageData, _, _ = get_fits_data(imagePath, verbose=verbose)
-            vmin, vmax = zscale.get_limits(imageData)
-            ax = axes[i, col_idx]
-            ax.imshow(imageData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax.set_title(f"{imagePlotTitle}", fontsize=10)
-            ax.xaxis.set_major_formatter(formatter)
-            ax.axis('off')
-            col_idx += 1
-
-        # plot bgmap
-        if bgMapPaths != 'none':
-            bgMapPath = bgMapPaths[i]
-            bgMapPlotTitle = os.path.basename(bgMapPath).replace('.fits', '').replace('_cutout_', '')
-            bgMapData, header, _ = get_fits_data(bgMapPath, verbose=verbose)
-            vmin, vmax = zscale.get_limits(bgMapData)
-            ax_bgmap = axes[i, col_idx]
-            ax_bgmap.imshow(bgMapData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax_bgmap.set_title(f"{bgMapPlotTitle}", fontsize=10)
-            ax_bgmap.xaxis.set_major_formatter(formatter)
-            ax_bgmap.axis('off')
-            col_idx += 1
-
-        # plot bgSub
-        if listBgSubDicts != 'none':
-            BgSubDict = listBgSubDicts[i]
-            bgSubPath = BgSubDict['Path']
-            bgSubName = os.path.basename(bgSubPath).replace('.fits', '').replace('_cutout_', ' ')
-            bgSubParams = f" BKSZ:{BgSubDict['back_size']} BKFILT:{BgSubDict['back_filtersize']}"
-            bgSubPlotTitle = bgSubName + bgSubParams
-            bgSubData, header, _ = get_fits_data(bgSubPath, verbose=verbose)
-            vmin, vmax = zscale.get_limits(bgSubData)
-            ax_bgsub = axes[i, col_idx]
-            ax_bgsub.imshow(bgSubData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax_bgsub.set_title(f"{bgSubPlotTitle}", fontsize=10)
-            ax_bgsub.xaxis.set_major_formatter(formatter)
-            ax_bgsub.axis('off')
-            col_idx += 1
-
-        # plot segmentation maps
-        if segPaths != 'none':
-            segPath = segPaths[i]
-            segPlotTitle = os.path.basename(segPath).replace('.fits', '').replace('_cutout_', '')
-            segData, header, _ = get_fits_data(segPath, verbose=verbose)
-            vmin, vmax = zscale.get_limits(segData)
-            ax_seg = axes[i, col_idx]
-            ax_seg.imshow(segData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax_seg.set_title(f"{segPlotTitle}", fontsize=10)
-            ax_seg.xaxis.set_major_formatter(formatter)
-            ax_seg.axis('off')
-            col_idx += 1
-
-        # plot weight maps
-        if whtPaths != 'none':
-            whtPath = whtPaths[i]
-            whtPlotTitle = os.path.basename(whtPath).replace('.fits', '').replace('_cutout_', '')
-            whtData, header, _ = get_fits_data(whtPath, verbose=verbose)
-            vmin, vmax = zscale.get_limits(whtData)
-            ax_wht = axes[i, col_idx]
-            ax_wht.imshow(whtData, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax_wht.set_title(f"{whtPlotTitle}", fontsize=10)
-            ax_wht.xaxis.set_major_formatter(formatter)
-            ax_wht.axis('off')
-            col_idx += 1
-
-    print("\n>>>>>>>>> Making background comparison figure. For full-size images, this can tak a few mins. Started at: ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    print("\n>>>>>>>>> Making background comparison figure. For large images, this can take a few mins. Started at: ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     plt.subplots_adjust(hspace=0.4, wspace=0.3)
 
     if saveFig and overwrite==True:
-        outDir = '/raid/scratch/hullyott/cataloguing/plots/'
+        outDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/plots/'
         outputPath = outDir +  figTitleSubstr + bgSubParams.replace(":", '').replace(' ', '_') + ".pdf"
         try:
             plt.savefig(outputPath, format='png', dpi=300)
@@ -623,11 +578,11 @@ def bg_plotter(imagePaths='none', bgMapPaths='none', listBgSubDicts='none', badM
         except Exception as e:
             print(f"Error: Could not save the file {outputPath}. Reason: {e}")
 
-    if any('cutout' in path for path in subsetPaths):
+    if show_fig: 
         print("\n>>>>>>>> Opening background figure. ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         plt.show()
        
-######################## do depths ##################################################
+######################## do photometry and measure depths ##############################################
 def aperture_photometry_blank(imageName, segMap, whtMap, apSize, gridSeparation=100, pixScale=-99.0, next=0, clean=False, outputFitsName='none', imageDir='', verbose=False, field='NORMAL', overwrite=False):
     """
     Performs aperture photometry across the image at fixed intervals (defined by gridSeperation), 
@@ -647,11 +602,7 @@ def aperture_photometry_blank(imageName, segMap, whtMap, apSize, gridSeparation=
 	    imageDir(str)        Default directory for outputs.
 	?	field(str)           Special cleaning rules for certain fields (e.g., NIRSPEC).
 
-
-
      """
-    
-    print("aperphotblank ", segMap, whtMap, apSize)
 
     from astropy.io import fits
     from astropy.table import Table, hstack, join
@@ -908,16 +859,26 @@ def aperture_phot_fast(imageData, xArray, yArray, radii, subpix=5):
     
     return phot_apertures
 
-def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, verbose=False, mask = False, sigmaClip = 3.0, plot = 'none', regFile = 'none', fitGauss = False):
-    ''' Code to find the local depth around a given aperture coordinate, or coodinates.
-    Using the closest numApertures apertures.'''
+def local_depths(cleanTable, apString, x, y, numApertures, zeropoint=-99.0, verbose=False, mask=False, sigmaClip=3.0, plot='none', regFile='none', fitGauss=False):
+    ''' 
+    Measures the local depth around a given aperture coordinate, or coodinates.
+    Uses the closest numApertures apertures.
 
-    #plot = 'nirspec_test'
-    #verbose = False
-    
-    #from astropy import units as u
-    import numpy as np
-    import matplotlib.pyplot as plt
+    Defines positions around which to make measurements > create .reg file if needed > do sigma clipping (twice) > fitr a gaussian to sigma-clipped distribution > normalise >> if zeropoint<-1.0, localDepths == sigma_MAD elif zeropoint>-1. call return_mag: i.e. if sigma_MAD is small, localDepth == -99 >> if there are no apertures nearby to x,y, it's a masked region. Record the position in a MaskArr as ==1 > check for NANs and set depth here to -99 > Return localDepths!
+
+    cleanTable()        Reduced blank ap phot table which contain s only phot from  blank 
+                        regions (according to seg map) which have a weight of greater than 0
+    apString(str)       size of aperutre of interest as a string; for file naming purpose, etc.
+    x(arr)              pixel coordinates at which to make depth measurement
+    y(arr)              pixel coordinates at which to make depth measurement
+    numApertures(int)   number of apertures you want to place around each object
+    zeropint(float)     zeropoint for magnitude calculation
+    mask(Boolean)       True for recorded masked regions to be returned (not near a good aperture)
+    sigmaClip(float)    Number of times to perform sigma-clipping
+    plot(str)           name of plot
+    regFile(str)        Path to regions file containing known masked regions
+    fitGauss(Boolean)   fit Gaussian to sigma-clipped distribution?
+    '''
     
     ## Check x and y have the same size
     if len(x) != len(y):
@@ -932,31 +893,24 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
     
     allApertureResults = np.array(cleanTable['IMAGE_flux'+apString])
     
-    ## do two lots of sigma clipping
+    ## do two lots of sigma clipping to improve accuracy
     
-    ## Make a nice output array
+    ## define output array
     localDepths = np.zeros(x.size)
     maskArray = np.zeros(x.size)
     
-    #print("There are ", x.size, " positions to calculate depths for.")
-    #print cleanTable
-    #print allApertureResults
-    #print localDepths
-    #exit()
-    
+    print("There are ", x.size, " positions to calculate depths for.")
+
     if regFile != 'none':
         tf = open(regFile, 'w')
         print('Masking with reg file, ', regFile)
 
     if plot != 'none':
         import matplotlib.backends.backend_pdf
-        plotname = plot + '_check_mad.pdf'
+        plotname = plot + '_check_mad.pdf' # Median Absolute Deviation 
         pdf = matplotlib.backends.backend_pdf.PdfPages(plotname)
-
-    # testing
-    #x = x[1000:1100]
     
-    # get a minimum separation
+    # get a minimum separation between depth measurements
     diffx = np.min(np.abs(y - np.roll(y, 1)))
     print('the miminum x separation is ', diffx)
     
@@ -964,10 +918,7 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
     for xi, xpos in enumerate(x):
         #for yi, ypos in enumerate(y):
         ypos = y[xi]
-        
-        #if yi > 4000:
-        #    print "Initialising loop."
-            
+
         ## calculate the radius        
         deltaX = apX - xpos
         deltaY = apY - ypos
@@ -977,7 +928,7 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
         #sortedIndicies = np.argsort(radius)
         ## do this faster!
         idx = np.argpartition(radius, numApertures)
-        useIndicies = idx[0:numApertures]
+        useIndicies = idx[0:numApertures] # use these indices for local measurements: meet min seperation requirement, uses correct step size
         
         ## Check that the radius here is close!!
         #print "The radius is ", radius[useIndicies]
@@ -985,7 +936,6 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
         apRedX= apX[useIndicies]
         apRedY= apY[useIndicies]
         
-        #print numApertures
         if regFile != 'none':
             for i in range(apRedX.size):
                 tf.write('circle\t{0}\t{1}\t6\n'.format(apRedX[i], apRedY[i]))
@@ -1011,51 +961,37 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
         if verbose:
             print("The largest radii", sortedRadius[-4:])
         
-        
         ## do a check to see if there are actually apertures there
         ## or if we are at the edge of the image
         
         #############################################
         ## now calculate the depth!
         ## plot the results
-        
             
         ## First clip the data to remove outliers
-        ## that will skew the SD
+        ## that will skew the StdDev
         medianFlux = np.median(apertureResults)
-        mad = np.median(abs(apertureResults - medianFlux))
+        mad = np.median(abs(apertureResults - medianFlux)) # Median Absolute Deviation
         sigma_mad = 1.4826*mad
 
         if (plot != 'none'):
             fig = plt.figure()
             bins = np.arange(-3.0*sigma_mad, 3.0*sigma_mad, sigma_mad/5.0)
-            #print bins
-            #exit()
             n,bin,patches = plt.hist(apertureResults, bins = bins, facecolor = 'green', alpha = 0.75)
-            
             # split by region
             north = (apRedX > np.median(apRedX)) & (apRedY > np.median(apRedY))
-            #n,bin,patches = plt.hist(apertureResults[north], bins = bins, facecolor = 'yellow', alpha = 0.75)
             south = (apRedX < np.median(apRedX)) & (apRedY < np.median(apRedY))
-            #n,bin,patches = plt.hist(apertureResults[south], bins = bins, facecolor = 'blue', alpha = 0.75)
             
             # plot the median etc
             plt.plot([medianFlux, medianFlux], [0, max(n)])
             plt.plot([medianFlux-sigma_mad, medianFlux-sigma_mad], [0, max(n)], color = 'k')
             plt.plot([medianFlux+sigma_mad, medianFlux+sigma_mad], [0, max(n)], color = 'k')
             plt.xlim([medianFlux -5.0*sigma_mad, medianFlux + 5.0*sigma_mad])
-            
-        
+
         if verbose:
             print("The mad sigma is ", sigma_mad, " after first run, mag = {0:.2f}".format(-2.5*np.log10(5.0*sigma_mad) + zeropoint))
-            
-            #if yi > 4000:
-            #        print "Searching for apertures in this sigma range. "
-            
-            #print "the mad = ", sigma_mad
 
         if sigma_mad > 1E-15:
-            
             if sigmaClip > 0.0:
                 # First sigma clip
                 good_indicies = (apertureResults > medianFlux - sigmaClip*sigma_mad) & \
@@ -1079,20 +1015,15 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
                 finalClippedResults = clippedResults[good_indicies_two]
                 if (plot != 'none'):
                     n,bin,patches = plt.hist(finalClippedResults, bins = bins, facecolor = 'red', alpha = 0.75)
-                
-                    if fitGauss:
+                    if fitGauss: # fit a gaussian to these points!
                         from scipy.stats import norm
                         import matplotlib.mlab as mlab
-                        
-                    # fit a gaussian to these points!
-                        
                         (mu, sigma) = norm.fit(clippedResults)                
                         yll = mlab.normpdf(bins, mu, sigma)
                         
                         # normalise this
                         plt.plot(bins, np.sum(n)*yll/np.sum(yll), 'k', linewidth=3)
                         print ("The gauss sigma is ", sigma, " after first run, mag = {0:.2f}".format(-2.5*np.log10(5.0*sigma) + zeropoint))
-
             
             ## Now calculate the final mad sigma value
                 medianFlux = np.median(finalClippedResults)
@@ -1102,8 +1033,6 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
                     print("After second clipping... = ", sigma_mad)
                     print("The depth = {0:.2f}".format(return_mag(sigma_mad, zeropoint, sigma = 5.0)))
                     
-            
-            
         #######################################
         # if not clip then just use this.
         #######################################
@@ -1112,14 +1041,12 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
                 ## convert to magnitudes
             #print sigma_mad, xpos, ypos
             localDepths[xi] = return_mag(sigma_mad, zeropoint, sigma = 5.0)
-                #print "The depth is then: {0:.2f} from {1} apertures.".format(return_mag(sigma_mad, zeropoint, sigma = 5.0), finalClippedResults.size)
             
         else:
                 ## keep as fluxes
                 #print "The depths are going to be in fluxes, not magnitudes"
             localDepths[xi] = sigma_mad
                 #if yi > 4000:
-
 
         if np.isnan(localDepths[xi]):
             print('NAN here', sigma_mad)
@@ -1130,15 +1057,10 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
             ## Set a masked value (for plotting)
             maskArray[xi] = 1
             #print('Masking this as good ', diffx*10, sortedRadius[0])
-            
-## set the depth to -99
-         #   localDepths[xi] = -np.abs(localDepths[xi])
-            #print "Here ", localDepths
-            #    print "I have added to the final array."
-            #exit()
-            
+        
+        # give the user an update every 1000 positions about the progess of calculating the local depths     
         if xi % 1000 == 0:
-            print("At position ", xi)
+            print("Calculating local depth at position ", xi, "out of ",x.size, " positions", datetime.now().strftime("%H:%M:%S"))
 
         if (plot != 'none'):
             pdf.savefig(fig)
@@ -1151,13 +1073,11 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
         pdf.close()
         print('Plot at ', plotname)
 
-#    print(localDepths)
     # get rid of nans
     bad_indicies = np.isnan(localDepths)
     if np.any(bad_indicies):
         print('Fixing NANs in the local_depth code')
         localDepths[bad_indicies] = -99.0
-        #print localDepths[xi], xpos, ypos, sigma_mad
 
     if mask: 
         return localDepths, maskArray
@@ -1166,94 +1086,80 @@ def local_depths(cleanTable, apString, x, y, numApertures, zeropoint = -99.0, ve
         return localDepths
 
 def return_mag(flux_counts, zeropoint, sigma = 1.0):
-    
+    """ If there is a very low number of flux counts, the magnitude is set to -99. 
+         Otherwise, the magnitude is calculated as below. """
     import math
-    
     if flux_counts < 1E-15:
         return -99.0
     else:
         return -2.5*math.log(sigma*flux_counts, 10.0) + zeropoint
 
+def grid_depths(gridTable, x, y, faster=True, verbose=False, nearby=False, n_jobs=8):
+    """
+    Find the position of the closest depth measurement from a grid.
 
-def grid_depths(gridTable, x, y, faster = True, verbose = False, nearby = False):
-    
-   ''' Code to find the closest depth measurement from my previous analysis. Faster than truely local depths '''
-   
-   import numpy as np
-   
-   xgrid = gridTable['x']
-   ygrid = gridTable['y']
-   keys = gridTable.colnames
-   #print keys
-   #print "Grid params."
-   #print len(xgrid), len(ygrid)
-   #print xgrid[0], ygrid[0], xgrid[1], ygrid[1]
-   
-   depthsOverField = gridTable['depths']
-   
-   ## Make an output array
-   depthArray = np.zeros(x.size)
-   depthArray[:] = -99.0
-   
-   if faster:
-       if verbose:
-           print("Using faster method.")
-           print("Input array size is ", x.size)
-           deltay = np.min(ygrid)
-           deltax = np.min(xgrid)
-                  
-       #print "The delta is ", deltax, deltay
-       #print deltax, np.max(xgrid)
-       #print deltay, np.max(ygrid)
-       #print xgrid[0:10]
-       #print ygrid[0:10]
-    ## loop through the grid instead of each object
-       for xi in range(xgrid.size):
-           
-           xmin = xgrid[xi] - deltax
-           xmax = xgrid[xi] + deltax
-           ymin = ygrid[xi] - deltay
-           ymax = ygrid[xi] + deltay
-           #print xmin, xmax, ymin, ymax
-           #exit()
-           
+    Parameters
+    ----------
+    gridTable(astropy Tb)   Must have columns 'x', 'y', 'depths'.
+    x, y(ndarray)           Coordinates of objects.
+    faster(bool)            If True, uses grid-based binning.
+                            If False, uses nearest-neighbour search.
+    verbose(bool)           Print debug info.
+    nearby(bool)            If True, averages over nearby pixels (numpoints=10).
+    n_jobs(int)             Number of parallel jobs for joblib (-1 = all available cores).
+    """
 
-           ii = (x > xmin) & (x <= xmax) & (y > ymin) & (y <= ymax)
-           
-           depthArray[ii] = depthsOverField[xi]
-               
-           # use this to average over nearby pixels.
-           
-               
-   else:
-       
-   ## Find the closest point to the objects x and y positions
-   ## Loop!
-       for xi in range(x.size):
-           
-       ## make a radius array
-           deltax = (xgrid - x[xi])
-           deltay = (ygrid - y[xi])
-           radius = np.sqrt(deltax*deltax + deltay*deltay)
-           mini = np.argmin(radius)
-           
-       ## try using argpartition
-           numpoints = 10
-           idx = np.argpartition(radius, numpoints)
-           
-           if nearby:
-               
-               mini = idx[0:numpoints]
-               #print("The nearby depths are = ", depthsOverField[mini])
-               #print("Before = ", depthsOverField[mini][0])
-           
-           
-       #print "The closest point is ", xgrid[mini], ygrid[mini], " to ", x[xi], y[xi]
-           depthArray[xi] = depthsOverField[mini][0]
-       #exit()
-   
-   return depthArray
-       
+    xgrid = np.array(gridTable['x'])
+    ygrid = np.array(gridTable['y'])
+    depthsOverField = np.array(gridTable['depths'])
+
+    depthArray = np.full(x.size, -99.0)
+
+    if faster:
+        if verbose:
+            print("Using faster method.")
+            print("Input array size is ", x.size)
+
+        deltay = np.min(ygrid)
+        deltax = np.min(xgrid)
+
+        print("Doing grid_depths...", datetime.now().strftime("%d %H:%M:%S"))
+
+        def process_gridpoint(xi):
+            xmin = xgrid[xi] - deltax
+            xmax = xgrid[xi] + deltax
+            ymin = ygrid[xi] - deltay
+            ymax = ygrid[xi] + deltay
+            ii = (x > xmin) & (x <= xmax) & (y > ymin) & (y <= ymax)
+            return ii, depthsOverField[xi]
+
+        results = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(process_gridpoint)(xi) for xi in range(xgrid.size)
+        )
+
+        for ii, depth in results:
+            depthArray[ii] = depth
+
+    else:
+        def process_object(xi):
+            deltax = (xgrid - x[xi])
+            deltay = (ygrid - y[xi])
+            radius = np.sqrt(deltax*deltax + deltay*deltay)
+            idx = np.argpartition(radius, 10)
+            if nearby:
+                mini = idx[:10]
+            else:
+                mini = [np.argmin(radius)]
+            return xi, depthsOverField[mini][0]
+
+        results = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(process_object)(xi) for xi in range(x.size)
+        )
+
+        for xi, depth in results:
+            depthArray[xi] = depth
+
+    return depthArray
        
    
 def grid_psf(gridTable, x, y, faster = True, verbose = False, nearby = False):
@@ -1278,12 +1184,12 @@ def grid_psf(gridTable, x, y, faster = True, verbose = False, nearby = False):
    
    if faster:
        if verbose:
-           #print("Using faster method.")
-           #print("Input array size is ", x.size)
-        deltay = np.min(ygrid)
-        deltax = np.min(xgrid)
-      
-    #print "The delta is ", deltax, deltay
+           print("Using faster method.")
+           print("Input array size is ", x.size)
+       deltay = np.min(ygrid)
+       deltax = np.min(xgrid)
+  
+       print("The delta is ", deltax, deltay)
        #print deltax, np.max(xgrid)
        #print deltay, np.max(ygrid)
        #print xgrid[0:10]
@@ -1335,12 +1241,37 @@ def grid_psf(gridTable, x, y, faster = True, verbose = False, nearby = False):
    return psfArray
 
 
-def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, numApertures = 200, strips = False, plot = False, local = True, recalculate = False, globalplot = False, clean = True, plotDir = '', maskreg = 'none', refimage = 'none'):
+def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step=500, numApertures=200, strips=False, plot=False, local=True, recalculate=False, globalplot=False, clean=True, plotDir='', maskreg='none', refimage='none'):
     ''' extractDepths.py
     
-    Code to extract the depths from the input table of aperture photometry
-    
-    Modified: Dec 2019 '''
+    For each aperture diameter supplied in apDiametersAS, 
+    extract the local depths from the blank aperture photometry table (inputTableFile) by first defining the suitable blank-sky positions to measeure the depths in by requiring the seg map to be empty and the weight at the position to be greater than zero. If the local depths have not already been calculated and stored in localDepthsFile, call local_depths() to make it (and optionally the maskArr). If localDepthsFile already exists, use this. 
+
+    Remove any negative values from localDepthsFile, finally defining the local depths table for the image. Next, find the local depths for any regions of interest e.g. stripes. Call return_instrips() to do this. If maskreg does not exist/is not supplied, crudely buffer around the edges of the image where depth is expected to be lower (VIRCAM/VISTA User Manual, 2009, Fig 17). Define the local depths tables for these regions of interest. Make plots. 
+
+    GLOBAL DEPTHS
+
+    INPUT(s)
+        inputTableFile(str)     Path to blank aperture photometry file i.e. phot/H_aperPhot.fits
+        apDiametersAS(arr)      Array of aperture diameters you want to do phot with i.e. 1.8, 2.0, 3.0
+        zeropoint
+        step(int)
+        numApertures(int)       number of apertures you want to place around each object
+        strips(Boolean)         True for UVISTA. Observiing stategy means stripes must be accounted for 
+        plot(Boolean)           Do you want to make a plot of ...
+        local(Boolean)          ?
+        recalculate(Boolean)    Do you want to overwrite the depths/phot/localDepthsFile ?
+        globalplot(Boolean)     ?
+        clean(Boolean?          ?
+        plotDir(str)            Where do you want to save optional plot?
+        maskreg(str)            ? directory to mask.reg file
+        refimage(str)           ? reference image
+
+    OUTPUT(s)
+        Writes localDepthsFile and optionally MaskArr
+
+        regions, global_depth, median_local_depth, mode_local_depth
+    '''
 
     import matplotlib
     #matplotlib.use('pdf')
@@ -1351,7 +1282,7 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
     from scipy.stats import norm
     from astropy import units as u
     import matplotlib.backends.backend_pdf
-    from new_catalogue_codes import return_instrips, mask_column
+    from hu_catalogue_codes import return_instrips, mask_column
     
     ###########################################
     # important setup
@@ -1377,7 +1308,7 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
         regions = ['fullimage', 'stripone', 'striptwo', 'stripthree', 'stripfour', 'gap1', 'gap2', 'gap3', 'gap4']
         regions = ['full', 'str1', 'str2', 'str3', 'str4', 'gap1', 'gap2', 'gap3', 'gap4']
         #deepStrips_ra_low = [149.3, 149.65, 150.02, 150.4]
-        #deepStrips_ra_high = [149.5, 149.85, 150.25, 150.6]
+        #deepStrips_ra_high = [149.5, 149.85, 150.25, 150.6] #TODO - did RB have the same issue?/think bout the bad mag patches?
         # convert to x and y!
         #strips_x_high = [9513, 18626, 27500, 35895]
         #strips_x_low = [4716, 13111, 22703, 31098]
@@ -1390,7 +1321,8 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
         
     else:
         regions = ['full']
-        
+
+    # create empty arrays for results - "bad" measurements are set to 0 here
     global_depth = np.zeros([len(regions), apDiametersAS.size])
     median_local_depth = np.zeros([len(regions), apDiametersAS.size])
     mode_local_depth = np.zeros([len(regions), apDiametersAS.size])
@@ -1433,9 +1365,7 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
         if clean == False:
             # do the cleaning here
             smallNum = 0.0000001
-        #print inputTable.colnames
-        #print inputTable['IMAGE_xcenter']
-        #print inputTable['IMAGE_ycenter']
+
          ## cut the table depending on apertures
          ## only accept coordinates where the seg map
          ## aperture is blank, and the wht map is > 0
@@ -1454,31 +1384,22 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
             reducedTable = inputTable
             
         ## Get the x and y coordianates of the apertures
-        apX = reducedTable['IMAGE_xcenter'] #/u.pix
+        apX = reducedTable['IMAGE_xcenter'] #/u.pix pixel coords
         apY = reducedTable['IMAGE_ycenter'] #/u.pix
         
-        ## Check if I need to run local depths from the
-        ## apertures
+        ## Check if I need to run local depths from the apertures
         
-        if (os.path.isfile(localDepthsFile) == False) or recalculate:
+        if not os.path.isfile(localDepthsFile) or recalculate:
             ## Files doesn't exist or I want to recalculate it  
             
             #############################################################
             ################## RUNNING LOCAL DEPTHS ####################
             
-           ## Find the min max so I can create array for local depths
-            #maxNumx = max(apX)
-            #maxNumy = max(apY)
-            #minNumx = min(apX)
-            #minNumy = min(apY)
-
-            ## Why?!
-            #xmax = max(apX) + min(apX)*3.0
-            #ymax = max(apY) + min(apY)*3.0
-            xmax = max(apX)# - min(apX)#*3.0
-            ymax = max(apY)# - min(apY)#*3.0
+            ## Create array of positions at which to measure the local depths based on the xy coords in the reduced blankapPhot table
+            xmax = max(apX)
+            ymax = max(apY)
             
-            numX = np.ceil(xmax/step)
+            numX = np.ceil(xmax/step) # number of measurements per dimension i.e. grid
             numY = np.ceil(ymax/step)
 
             x = min(apX) + np.arange(numX)*step ## modifed 21/9/2018 to add min(apX).
@@ -1490,6 +1411,7 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
             x = np.zeros(1) #.value
             y = np.zeros(1) #.value                
             
+            #populate the zero arrays
             for xi in np.arange(step/2.0, numX*step, step):
                 for yi in np.arange(step/2.0, numY*step, step):
                     x = np.append(x, xi)
@@ -1501,11 +1423,9 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
             x = x[1:]
             y = y[1:]
 
-            #            x = x[7000:7010]
-            #            y = y[7000:7010]
-            
             ## Now run local depths at those points
-            depthsLocalFull, maskArray = local_depths(reducedTable, apString, x, y, numApertures, zeropoint = zeropoint, mask = True, sigmaClip = 3.0)#, plot = plotDir + filterName + '_' + str(numApertures))
+
+            depthsLocalFull, maskArray = local_depths(reducedTable, apString, x, y, numApertures, zeropoint=zeropoint, mask=True, sigmaClip=3.0)#, plot = plotDir + filterName + '_' + str(numApertures))
             
             ## remove points that lie off the image
             #good_ind = depthsLocal > 0.0
@@ -1522,16 +1442,6 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
         else:
             # simply restore the results
             localTable = Table.read(localDepthsFile)
-            
-                ## extract the depths
-            #if 'depth' in keys:
-            #        #print "Yes!"
-            #    depthsLocalFull = localTable['depth']
-            #else:
-            #        #print "Calculating depths here. "
-            #    depthsLocalFull = localTable['depths']
-                
-
                 
     # for plotting and median depths, remove negative objects!
         gg = (localTable['mask'] > 0)
@@ -1553,7 +1463,6 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
                 #print('Splitting by strip')
                 good_indicies = return_instrips(x, y, region = region)
             else:
-
                 if maskreg == 'none':
                     ## put a buffer here
                     maxNumx = max(x)
@@ -1574,22 +1483,17 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
                     w = WCS(refimage)
                     ra, dec= w.all_pix2world(x,y, 1)
                     print('Masking with ', maskreg)
-                                        
                     hsci = refimage.find('HSC')
-                    
                     if hsci > -1:
                         hsc = True
                         print('Masking HSC')
                     else:
                         hsc = False
-
                     if dec[0] < -15.0:
                         # get the directory
-
                         kk = maskreg.rfind('/')
                         regDir = maskreg[:kk+1]
                         #print(regDir)
-                        
                         fff = refimage.find('HSC-R')
                         if fff > -1:
                             circlesFile = regDir + 'HSC_circle_cdfs_R_xy.reg'
@@ -1600,8 +1504,7 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
                     else:
                         #print(ra, dec, maskreg, hsc)
                         good_indicies = mask_column(ra, dec, maskreg, tokeep = True, hsc = hsc)
-                    
-                
+
                 #print "There are ", x.shape, y.shape, " local depth positions..."
 
             #print('There are {0} good indicies'.format(np.sum(good_indicies)))
@@ -1631,15 +1534,13 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
                     magmax = 25.5
                 else:
                     magmin = 24.5
-                    magmax = 27.0
+                    magmax = 27.0 #TODO why hard-coded?
                     
             if nirspec:
                 magmin = medianLocalDepth - 0.9
                 magmax = medianLocalDepth + 1.3
             
             if region == 'full':
-
-                                
                 fig = plt.figure(figsize=(6,8))
                 gs = gridspec.GridSpec(2,1,height_ratios=[2,1])
                 ax = plt.subplot(gs[0])
@@ -1690,13 +1591,8 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
                     #print('Definiting msoothed here, bins ', smoothed.shape, bins.shape)
                     
                 else:
-
-                    #print('Strips = false?')
-                    #print(depthsLocal)
-                    #print(magmin, magmax)
                     bad = True
                     if bad:
-                        
                         histy, hists, _ = plt.hist(depthsLocal, facecolor= colourArray[ri], alpha = 0.8, density= True, range = [magmin, magmax], bins =bins, histtype = 'step')
                         hx, hy, _ = plt.hist(localTable['depths'], facecolor= 'grey', alpha = 0.8, density = True, range = [magmin, magmax], bins = bins, zorder = 1, histtype = 'step')
                         
@@ -1834,11 +1730,11 @@ def extract_local_depths(inputTableFile, apDiametersAS, zeropoint, step = 500, n
     
     return regions, global_depth, median_local_depth, mode_local_depth
 
-
-
-
 def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, back_filtersize=9, apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), whtPath='NONE', whtType='NONE', IRACapDiametersAS=np.array([2.8, 3.8, 5.8, 9.8, 11.6]), segPath='NONE', outputDir='none', filterName='NONE', numApertures=300, step=200, overwrite=False, inputSex=baseDir+'data/bertin_config/video_mine.sex', strips=False, bgSub=True, mask='none', gridSepAS=3.0):
+    """
+    Perform background modelling and subtraction using SourceExtractor. If blank-sky aperture photometry results file doesn't exist, call aperture_photometry_blank() to estimate the blank-sky noise and write the file. Call extract_local_ddepths() to give local and global depths. Returns the paths to the bg-map and bg-subbed images and seg map.
 
+    """
 
     warnings_triggered = 0
     cd1Test = False
@@ -2005,19 +1901,19 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
         else:
             print(f"The SEG and/or BG subtracted map exist at: {segPath, bgSubPath} \n")
 
-    aperPhotFile = aperDir + filterName + '_aperPhot.fits'
+    aperPhotFile = aperDir + filterName + '_aperPhot.fits' # blank aperture phot measuremnts
     overwrite = False
     if os.path.isfile(aperPhotFile) == False or overwrite == True:
         # define the grid separation
         gridSepPixels = np.ceil(gridSepAS/pixScale) # 5'' separation
-        print("test: ",gridSepPixels)
+        #print("test: ",gridSepPixels)
         # gridSepPixels = 10.0
         
         # make this tunable...
         if bgSub == False:
             bgSubPath = imagePath
             print("Not using bg subtracted image.")
-        print("Measuring the aperture photometry.")
+        print(">>>>>>> Measuring the aperture photometry...", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
         ii = segPath.rfind('NIRSPEC')
         if ii > 0:
@@ -2025,9 +1921,8 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
         else:
             field = 'NONE'
 
-        print("aperture_photometry_blank is running")
         # if aperphotfile doesn't exist, call ap phot blank - outputFitsName is aperPhotFile
-        aperture_photometry_blank(bgSubPath, segPath, whtPath, apDiametersAS, gridSeparation = gridSepPixels, clean = True, outputFitsName = aperPhotFile, imageDir = imageDir, field = field, overwrite = overwrite)
+        '''aperture_photometry_blank(bgSubPath, segPath, whtPath, apDiametersAS, gridSeparation = gridSepPixels, clean = True, outputFitsName = aperPhotFile, imageDir = imageDir, field = field, overwrite = overwrite)
 
     #######################################################################
     # Then calculate the local depths, and make a nice plot
@@ -2035,7 +1930,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
     recalculate = False
 
     # mask
-    regions, globaldepths, meddepths, modedepths=extract_local_depths(aperPhotFile, apDiametersAS, zeropoint, recalculate=recalculate, numApertures=numApertures, step=step, plotDir=plotDir, strips=strips, maskreg=mask, refimage=bgSubPath) #, plot = True)
+    regions, globaldepths, meddepths, modedepths = extract_local_depths(aperPhotFile, apDiametersAS, zeropoint, recalculate=recalculate, numApertures=numApertures, step=step, plotDir=plotDir, strips=strips, maskreg=mask, refimage=bgSubPath) #, plot = True)
     
     ######################################################################
     # make a nice file with the output
@@ -2066,11 +1961,14 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
             f.write(printString)
 
     f.close()
-    print("Output file saved to ", depthFile)
+    print("Output file saved to ", depthFile)'''
     
     return bgMapPath, bgSubDict, segPath
 
 def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', back_size=32, back_filtersize=9, queue='none', reqFilters=['all'], apDiametersAS=np.array([1.8, 2.0, 3.0, 4.0, 5.0]), dataDir=baseDir+'data/', outputDir='none', overwrite=False, ra_str='none', dec_str='none', verbose=True, saveFig=True):
+    """
+    Calls necessary functions to measure and save the local and global depths for given filters within a supplied .lis file. Opens the detection catalogues for each filter (and a "bad" - MAG_APER[1]>50 - subset of each catalogue) in TOPCAT. Shows and saves comparitive images of the background models etc. Shows and saves the detections and the bad subset on top of the science image.
+    """
 
     # set the grid seperation in arcsec
     if fieldName == 'NIRSPEC':
@@ -2165,9 +2063,7 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
             for i in range(apDiametersAS.size-1):
 
                 apDiametersASstring = apDiametersASstring + ',{0:.2f}'.format(apDiametersAS[i+1])
-            
-            #print(apDiametersASstring)
-            print("Spawning in the queue...", queue)
+
             # make shell script
             tmpName = "tmp_{1}_{0}.sh".format(filterName, fieldName)
             f = open(tmpName, 'w')
@@ -2177,7 +2073,7 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
             
             # now execute this
             command = "addqueue -c 'tmp_{0}' -m 9 -q {0} -d ./{1}".format(queue, tmpName)
-            #print(command)
+            print(command)
             os.system('chmod +x {0}'.format(tmpName))
             os.system(command)
 
@@ -2231,6 +2127,7 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
                 if re.fullmatch(subpattern, subsetPath):
                     catPath = f"{baseDir}depths/catalogues/d{filt}.fits"
                     imagePath = f"{baseDir}data/COSMOS/UVISTA_{filt}_DR6.fits" # corresponds to the catalogue and subset catalogue
+                    HSCimagePath = f"{baseDir}data/COSMOS/{filt}_DR3.fits" 
                     catTable = Table.read(catPath)
                     subsetTable = Table.read(subsetPath)
                     badMag = round(100*(len(subsetTable)/len(catTable)),5)
@@ -2244,11 +2141,19 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
             if subpattern == subsetPath:
                 catPath = f"{baseDir}depths/catalogues/d{size}{filt}_cutout.fits"
                 whtPath = f"{baseDir}data/COSMOS/cutouts/UVISTA_{filt}_DR6_wht_{ra_str}_{dec_str}_size{size}.fits" # corresponds to the catalogue and subset catalogue
-                whtPaths.append(whtPath)
+                HSCwhtPath = f"{baseDir}data/COSMOS/cutouts/{filt}_DR3_wht_{ra_str}_{dec_str}_size{size}.fits" 
+                if os.path.isfile(whtPath):
+                    whtPaths.append(whtPath)
+                elif os.path.isfile(HSCwhtPath):
+                    whtPaths.append(HSCwhtPath)
             elif fullsize_subpattern == subsetPath:
                 catPath = f"{baseDir}depths/catalogues/d{filt}.fits"
                 whtPath = f"{baseDir}data/COSMOS/UVISTA_{filt}_DR6_wht.fits" # corresponds to the catalogue and subset catalogue
-                whtPaths.append(whtPath)
+                HSCwhtPath = f"{baseDir}data/COSMOS/{filt}_DR3_wht.fits"
+                if os.path.isfile(whtPath):
+                    whtPaths.append(whtPath)
+                elif os.path.isfile(HSCwhtPath):
+                    whtPaths.append(HSCwhtPath)
 
     if cutouts != 'none':
         detections_fig(cutoutPaths=cutoutPaths, catPaths=catPaths, subsetPaths=subsetPaths, badMags=badMags, saveFig=saveFig, overwrite=saveFig, verbose=verbose)
@@ -2256,10 +2161,9 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
         bg_plotter(cutoutPaths=cutoutPaths, bgMapPaths=bgMapPaths, listBgSubDicts=listBgSubDicts, badMags=badMags, segPaths=segPaths, whtPaths=whtPaths, saveFig=saveFig, overwrite=saveFig, verbose=verbose)
 
     else:
-        detections_fig(fullsizeimages, catPaths=catPaths, subsetPaths=subsetPaths, badMags=badMags, saveFig=saveFig, overwrite=saveFig, verbose=verbose)
+        #detections_fig(fullsizeimages, catPaths=catPaths, subsetPaths=subsetPaths, badMags=badMags, saveFig=saveFig, overwrite=saveFig, verbose=verbose)
 
         bg_plotter(fullsizeimages, bgMapPaths=bgMapPaths, listBgSubDicts=listBgSubDicts, badMags=badMags, segPaths=segPaths, whtPaths=whtPaths, saveFig=saveFig, overwrite=saveFig, verbose=verbose)
 
     return
     
-
