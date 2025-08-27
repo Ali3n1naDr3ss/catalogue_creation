@@ -80,18 +80,14 @@ for ff, fieldName in enumerate(fields):
 
     print('#############################################')
     print("Analysing field ", fieldName)
+    # Run the function
+    if se:
+        run_all_source_extractors(fieldName=fieldName,
+            detectionFilters=detectionFilters,
+            apDiametersAS=apDiametersAS, queue="none", memory=7, reqFilters=reqFilters,
+            IRACapDiametersAS=IRACapDiametersAS, overwrite=overwrite, se=True,
+            n_jobs=len(detectionFilters))
 
-    for df, detectionFilt in enumerate(detectionFilters):
-        if se:
-            print("Beginning se = True at: ",  datetime.now().strftime("%d/%m %H:%M:%S"), '\n')
-            # call the catalogue making code
-            run_source_extractor(fieldName, detectionFilt, apDiametersAS, queue = queue, memory = 7,reqFilters = reqFilters, IRACapDiametersAS = IRACapDiametersAS, overwrite = True)
-        # do this twice for the ch1 and ch2 requires the selection catalogue done
-        """HOLLY 28/03/25 
-        Does initial checks of files, filters, dirs etc
-        Calls run_se for each filter
-        Calculates scaling between image pixels and physical sizes
-        Runs SE is catalogue for filter does not exist """
 if se:
     print("Finished se = True at: ",  datetime.now().strftime("%d/%m %H:%M:%S"), '\n')
     exit()

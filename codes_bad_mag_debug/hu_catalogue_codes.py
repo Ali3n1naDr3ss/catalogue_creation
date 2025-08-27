@@ -6,6 +6,47 @@ from astropy.table import Table, Column, hstack, join, vstack, MaskedColumn
 
 baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'
 
+def run_all_source_extractors(fieldName, detectionFilters, apDiametersAS, 
+                              queue='none', memory=7, reqFilters=None, 
+                              IRACapDiametersAS=None, overwrite=True, 
+                              se=True, n_jobs=-1):
+    """
+    Run source extractor in parallel across detection filters.
+    
+    Parameters
+    ----------
+    fieldName : str
+        The field name being processed.
+    detectionFilters : list
+        List of detection filter names.
+    apDiametersAS : list
+        Aperture diameters.
+    queue : str
+        Queue to submit jobs to.
+    memory : int
+        Memory requirement for job submission.
+    reqFilters : list
+        Required filters.
+    IRACapDiametersAS : list
+        IRAC aperture diameters.
+    overwrite : bool
+        Whether to overwrite existing output.
+    se : bool
+        Whether to actually run SE.
+    n_jobs : int
+        Number of jobs to run in parallel (-1 = all cores).
+    """
+
+    def process_filter(detectionFilt):
+        if se:
+            print(f"Beginning se = True at {datetime.now().strftime('%d/%m %H:%M:%S')}, filter={detectionFilt}")
+            run_source_extractor(fieldName, detectionFilt, apDiametersAS,
+                                 queue=queue, memory=memory, reqFilters=reqFilters,
+                                 IRACapDiametersAS=IRACapDiametersAS,
+                                 overwrite=overwrite)
+    Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(process_filter)(detectionFilt) for detectionFilt in detectionFilters)
+
 def mask_column(ra, dec, regFile, ax = None, verbose = False, tokeep = False, plot = False, hsc = True, xy = False, circlesFile= 'NONE'):
 
     """
@@ -1760,7 +1801,6 @@ def run_source_extractor(field, detFilt, apDiameterAS, queue = 'none', reqFilter
         print("I will now run SE for {0} filters in field {1}, on queue = {2}.".format(availableFilters.size, field, queue))
         print("The filters are ", availableFilters)
         #input("Press enter to continue.")
-    
         
     # check the detection filter exists in catalogue
     detIndex = (availableFilters == detFilt)
@@ -1790,8 +1830,6 @@ def run_source_extractor(field, detFilt, apDiameterAS, queue = 'none', reqFilter
         outputCat = run_se(detFilt, filterName, imagedata, apDiameterASuse, inputSex, dirHere, queue = queue, field = field, outputDir = indiDir, overwrite = overwrite, memory = memory)
 
     return
-
-
 
 def run_se(detFilt, filterName, imagedata, apDiametersAS, inputSex, dirHere, assoc_file = 'none', queue = 'none', field = 'NONE', outputDir = '', overwrite = False, memory = 10.0, verbose = True):
     print("Running run_se: ", '\n')
@@ -1823,7 +1861,6 @@ def run_se(detFilt, filterName, imagedata, apDiametersAS, inputSex, dirHere, ass
         measimageDir = imagedata['directory'][mm][0]
     else:
         measimageDir = dirHere
-        
         
     ## extract the pixel size
     hdulist = fits.open(detimageDir + detImage)
@@ -1860,9 +1897,7 @@ def run_se(detFilt, filterName, imagedata, apDiametersAS, inputSex, dirHere, ass
             measImage = '{0}_bgsub.fits'.format(filterName)
             print('Using instead the bg subtracted image ', measImage)
             
-
         command = 'python3 stupid_phot.py {0} {1} {2} {3} {4}'.format(measimageDir + measImage, inputCat, apStringPix, str(imagedata['zeropoint'][mm][0]), outputCat)
-        
         
         if queue != 'none':
             # launch on glamdring queue

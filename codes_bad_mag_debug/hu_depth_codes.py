@@ -26,7 +26,7 @@ from astropy.visualization import ZScaleInterval
 print("hu_depth_codes.py run at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 # base output dir
-baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'
+baseDir = '/raid/scratch/hullyott/cataloguing/final/'
 
 ######################## file-handling and set-up functions ################################
 def get_fits_data(fitsImg, verbose=True):
@@ -107,7 +107,7 @@ def open_cats(cats, open_subset=True, overwrite=True):
         files_str = " ".join(subsets)
         command += f"{files_str} &"
         print(command)
-        os.system(command)
+        #os.system(command) #TODO: turn on
 
         return subsets
 
@@ -156,7 +156,7 @@ def make_cutout(filters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=Tr
         origFilePaths.append(whtPath)
     
     for f, file_ in enumerate(origFilePaths):
-        print(file_)
+        #print(file_)
         data, header, wcs = get_fits_data(file_, verbose=verbose) # retrieve the original image data, header
 
         # Convert RA/Dec to pixel coordinates
@@ -234,7 +234,6 @@ def make_cutout(filters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=Tr
                     hdul_out.writeto(cutoutPath, overwrite=overwrite)
                     outFiles.append(cutoutPath) # for later in func
              cutouPathHeaderTest = cutoutPath
-
         print("Cutout file written. Performing Header checks... ", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         # ensure header of data file is as expected 
         # i.e. if using a copy/cutout, header should == header of original file
@@ -283,20 +282,19 @@ def make_cutout(filters, size_arcsec, centre_ra, centre_dec, dataDir, verbose=Tr
                     if verbose:
                         print(f"original == cutout value: {originalHeader[key] == cutoutHeader[key]}", key, originalHeader[key], cutoutHeader[key])
 
-    print("\nCutout image and weight files have been made \n")
-    if verbose:
-        print(outFiles)
-    if warnings_triggered == 0:
-        print("All expected values are present.")
-    if warnings_triggered > 0:
-        print("\n>>>>> The following warnings were triggered during their creation: \n")
-        if unexpectedKeys:
-            warnings.warn(">>>>>>> WARNING: cutoutHeader does not match expected Header. Known potential issues: incorrect calculation of pixScale. Proceeding...")
-            print("\nKeys unique to Cutout Header: ",uniqueCutoutHeaderKeys, '\n')
-            print("Keys unique to Original Header: ",uniqueOrigImageHeaderKeys, '\n')
-        if unexpectedValues:
-            print("original == cutout value: False ... for these Keys: \n", unmatchedValues)
-    
+    if len(outFiles) != 0:
+        print("\nThe following cutout image and weight files have been made: \n", outFiles)
+        if warnings_triggered == 0:
+            print("All expected values are present.")
+        if warnings_triggered > 0:
+            print("\n>>>>> The following warnings were triggered during their creation: \n")
+            if unexpectedKeys:
+                warnings.warn(">>>>>>> WARNING: cutoutHeader does not match expected Header. Known potential issues: incorrect calculation of pixScale. Proceeding...")
+                print("\nKeys unique to Cutout Header: ",uniqueCutoutHeaderKeys, '\n')
+                print("Keys unique to Original Header: ",uniqueOrigImageHeaderKeys, '\n')
+            if unexpectedValues:
+                print("original == cutout value: False ... for these Keys: \n", unmatchedValues)
+
     return outFiles   
 
 ######################## Plotting and Figures ##################################################
@@ -1747,7 +1745,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
 
     # define the output files
     if outputDir == 'none':
-        outputDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/'
+        outputDir = baseDir
         if os.path.isdir(outputDir) == False:
             os.system('mkdir ' + outputDir)
         print("outputDir will be: ", outputDir)
@@ -1755,6 +1753,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
     # seg map, bkg map, bgsub images
     imageDir = outputDir + 'images/'
     if os.path.isdir(imageDir) == False:
+        breakpoint()
         os.system('mkdir ' + imageDir)
 
     plotDir = outputDir + 'plots/'
@@ -1772,11 +1771,10 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
     resultsDir = outputDir + 'results/'
     if os.path.isdir(resultsDir) == False:
         os.system('mkdir ' + resultsDir)
-   
+
     if cutouts != 'none':
         Dir = imagePath.split('UVISTA_')[0]
         cutoutDir = Dir + 'cutouts/'
-
         if '.fits' not in imagePath.split('/')[-1]:
             imagePath = cutoutDir + imagePath.split('/')[-1]+'.fits'
         else:
@@ -1794,6 +1792,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
 
         print("the whtpath is", whtPath)
 
+    
     parts = imagePath.split('/') # split image dir by /
     if len(parts) > 1:
         baseName = parts[-1] # image filename string
@@ -1978,7 +1977,8 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
         gridSepAS = 3.0
         
     # Read in the images file
-    dirHere = dataDir + fieldName + '/'
+    dirHere = dataDir 
+    print("dirHere = dataDir ", dataDir )
     imagedata = read_image_lis(dirHere)
     availableFilters = np.array(imagedata['Name'])
     print("The available filters are ", availableFilters)
@@ -2019,7 +2019,8 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
                 cutoutPath = cutout
                 cutoutName = os.path.basename(cutoutPath)
                 imageName = imageName.split('.')[0]
-                if cutoutName.startswith(imageName) and ('wht' not in cutoutName):
+                #if cutoutName.startswith(imageName) and ('wht' not in cutoutName):
+                if cutoutName.startswith(imageName):
                     imageName = cutoutName
                     print("The imageName is ", 'cutouts/'+imageName)
 
@@ -2032,7 +2033,7 @@ def get_depths(fieldName, fullsizeimages='none', cutouts='none', size='none', ba
                     print("The whtName is ", 'cutouts/'+whtName)
 
         if imageDir == 'here':
-            imageDir = dataDir + fieldName + '/'
+            imageDir = dataDir
         
         # Now spawn the depths!
         if queue == 'none':

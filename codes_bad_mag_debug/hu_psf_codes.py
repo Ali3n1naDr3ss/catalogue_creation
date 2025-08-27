@@ -2,8 +2,7 @@ import numpy as np
 import os
 from astropy.table import Table,Column, hstack
 
-baseDir = '/raid/scratch/'
-baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'# TODO change back
+baseDir = '/raid/scratch/hullyott/cataloguing/final/'
 
 def psfex(imageName, filterName, fieldName, zeropoint, depthDir, apDiametersAS = np.array([1.8, 2.0, 3.0, 4.0, 5.0]), whtName = 'NONE', whtType = 'NONE', segName = 'NONE', outputDir = 'none', overwrite = False, overwritePSF = False, inputSex = baseDir + 'data/bertin_config/video_psfex.sex', inputPSFEx = baseDir + 'data/bertin_config/default_cube.psfex', strips = False, bzk = False, starsOnly = False, useCat = 'NONE'):
     print("Running psfex(): ", '\n')

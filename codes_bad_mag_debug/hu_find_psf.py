@@ -10,23 +10,24 @@ Modified: 7th Feb 2025
 """
 
 ###################### Import useful modules #########################
-
 import os
 import sys
 import numpy as np
 from hu_psf_codes import get_psf
 ######################### Set-up ####################################
+baseDir = '/raid/scratch/hullyott/cataloguing/final/'
+
 fields = ['COSMOS']
 
 # required aperture diameter
 reqFilters = ['Y', 'J', 'H', 'K', 'JH', 'HK', 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y']
 queue = 'none'
-overwrite = True # <<<<<<<<<<<<<<<<< OVERWRITE
+overwrite = False # <<<<<<<<<<<<<<<<< OVERWRITE
 
 # to run the first stage for each filter, set to True
 # then check the pdf, update the star_param file
 # then run again set to False
-stars = False
+stars = True
 
 ############################### Loop ################################
 ## Loop through the different fields
@@ -35,7 +36,7 @@ for ff, fieldName in enumerate(fields):
     print('#############################################')
     print("Analysing field ", fieldName)
     
-    outputDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/psf/{0}/'.format(fieldName)
+    outputDir = os.path.join(baseDir ,'psf/{0}/'.format(fieldName))
 
     if os.path.isdir(outputDir) == False:
         os.system('mkdir ' + outputDir)

@@ -25,16 +25,16 @@ filter2 = 'UVISTA_H_DR6'
 filter3 = 'None'    # Set filter3 to 'None' if you only want to stack 2.
 
 # Rename the filters when saving since the above UVISTA ones are a mess
-name1 = 'H'
-name2 = 'K'
+name1 = filter1.split('_')[1]
+name2 = filter2.split('_')[1]
+
 
 filters = [filter1, filter2, filter3]
 fields = ['COSMOS']
 
 # Image dir for UltraVISTA
-imageDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/data/COSMOS/'
-#stackDir = os.path.join(imageDir, 'test')
-stackDir =imageDir
+imageDir = '/raid/scratch/hullyott/cataloguing/final/data/COSMOS/'
+stackDir = imageDir
 
 print('Stacking {0} in {1}'.format(filters, fields))
 
@@ -80,7 +80,7 @@ for i, fieldName in enumerate(fields):
                 whtHeader3, whtData3 = load_fits(whtPath3)
 
     # Stack = (Y / (sigma_Y)**2) + (J / (sigma_J)**2)
-    # If VIDEO or UVISTA: the conf.fits files are already in inverse variance
+    # If VIDEO or UVISTA: already in inverse variance
     # So stack = w_Y*Y + w_J*J
 
     print('########## Computing inverse variance of the images ###########')
@@ -143,9 +143,9 @@ for i, fieldName in enumerate(fields):
     print('########Saving image.#########')
     
     if filter3 == 'None':
-        fits.writeto(stackDir + '/{0}_{1}{2}_DR6.fits'.format(fieldName.upper(), name1, name2), finalImage, header1, overwrite=False)
+        fits.writeto(stackDir + '/{0}_{1}{2}_DR6.fits'.format(filter1.split('_')[0].upper(), name1, name2), finalImage, header1, overwrite=False)
     if filter3 != 'None':
-        fits.writeto(stackDir + '/{0}_{1}{2}{3}_drcoadd.fits'.format(fieldName.upper(), filter1, filter2, filter3), finalImage, header1, overwrite=True)
+        fits.writeto(stackDir + '/{0}_{1}{2}{3}_drcoadd.fits'.format(filter1.split('_')[0], filter1, filter2, filter3), finalImage, header1, overwrite=True)
 
     print('###########Saved image to ' + stackDir + fieldName.upper())
 
