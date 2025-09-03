@@ -4,6 +4,7 @@ def open_cats(cats, open_subset=True, overwrite=False):
     """
         Opens catalogues for filters of interest in TOPCAT.
         Also creates the subsets and returns them for future use.
+        NB: has only been tested for master catalogues. Opening depth cats requires debugging.
 
     INPUT(s)
         cats[list(str)]     list of paths to the cats you want to open. 
@@ -109,12 +110,6 @@ if len(cats) == len(filters):
     open_cats(cats, open_subset=True)
 else:
     print(">>>>>>> WARNING: did not find corresponding catalogue for each of the filters. Found: \n", cats) 
-
-
-
-
-
-
 
 
 
