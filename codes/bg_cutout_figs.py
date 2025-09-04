@@ -7,6 +7,10 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 from datetime import datetime
+import matplotlib.pyplot as plt
+from astropy.visualization import simple_norm
+from matplotlib.ticker import ScalarFormatter
+from astropy.visualization import ZScaleInterval
 
 def get_fits_data(fitsImg, verbose=True):
     """ Returns data, header, and wcs of a fits image. """
@@ -395,11 +399,12 @@ def bg_subtraction(zeropoint, cutouts=[], size='none', back_size=32, back_filter
             param_file = baseDir + 'data/bertin_config/default.param'
 
             size = str(size)
-            print("lllll", imageDir, '\n', filterName, size, '\n', catDir)
-            segPath = imageDir + filterName + size +'_cutout_seg.fits'  
-            bgSubPath = imageDir  + filterName + size + '_cutout_bgsub.fits'
-            bgMapPath = imageDir  + filterName + size + '_cutout_bgmap.fits'
-            outputCatalogue = catDir + 'd' + filterName + size + '_cutout.fits'
+            back_size = str(back_size)
+            back_filtersize = str(back_filtersize)
+            segPath = imageDir + filterName + size + '_'+ back_size + '_' + back_filtersize +'_cutout_seg.fits'  
+            bgSubPath = imageDir  + filterName + size + '_'+ back_size + '_' + back_filtersize + '_cutout_bgsub.fits'
+            bgMapPath = imageDir  + filterName + size + '_'+ back_size + '_' + back_filtersize + '_cutout_bgmap.fits'
+            outputCatalogue = catDir + 'd' + filterName + '_'+ back_size + '_' + back_filtersize + size + '_cutout.fits'
             # dict used in bg_plotter
             bgSubDict['Path'] = bgSubPath
             bgSubDict['back_size'] = back_size
@@ -436,9 +441,65 @@ def bg_subtraction(zeropoint, cutouts=[], size='none', back_size=32, back_filter
         else:
             print(f"The SEG and/or BG subtracted map exist at: {segPath, bgSubPath} \n")
 
-cutouts = prep(size_arcsec=100, centre_ra=149.5, centre_dec=2.2, filters=['HSC_Y'])
-bg_subtraction(zeropoint=30, cutouts=cutouts, size=100)
-#open_images()
+def plot_bgmap(bgMapPath, savePath=None, cmap='binary', vmin=None, vmax=None):
+    """
+    Make a figure of the background map produced by Source Extractor.
+    
+    Parameters
+    ----------
+    bgMapPath : str
+        Path to the bgmap FITS file.
+    savePath : str, optional
+        Path to save the figure (if None, just shows it).
+    cmap : str
+        Colormap for imshow (default 'viridis').
+    vmin, vmax : float, optional
+        Limits for color scale. If None, auto-scaled.
+    """
+    # load the fits bgmap
+    with fits.open(bgMapPath) as hdul:
+        data = hdul[0].data
+
+    # Apply z-scaling
+    zscale = ZScaleInterval()
+    vmin, vmax = zscale.get_limits(data)
+
+    formatter = ScalarFormatter(useMathText=False)
+    formatter.set_scientific(False)
+    formatter.set_useOffset(False)
+
+    plt.figure(figsize=(8, 6))
+
+    plt.imshow(data, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
+    plt.colorbar(label="Background level")
+    plt.title(f"Background map: {os.path.basename(bgMapPath)}")
+    plt.xlabel("X (pixels)")
+    plt.ylabel("Y (pixels)")
+    
+    if savePath:
+        plt.savefig(savePath, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Saved background map figure to {savePath}")
+    else:
+        plt.show()
+
+filt = 'Y'
+size_arcsec = 500 # TODO: testing on different sizes
+back_size = 4
+back_filtersize = 1
+cutouts = prep(size_arcsec=size_arcsec, centre_ra=149.5, centre_dec=2.2, filters=[f'{filt}']) # TODO: doesn't work for len(filter lists)>1
+bg_subtraction(zeropoint=30, cutouts=cutouts, size=size_arcsec, back_size=back_size, back_filtersize=back_filtersize)
+
+bgMapDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/COSMOS_bgFigs/images/'
+size_arcsec = str(size_arcsec)
+back_size = str(back_size)
+back_filtersize = str(back_filtersize)
+
+bgMapName = f'{filt}{size_arcsec}_cutout_bgmap.fits'
+bgMapPath = bgMapDir + bgMapName
+savePath = savePath=f"/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/COSMOS_bgFigs/bg_maps/{filt}_{back_size}_{back_filtersize}_bgmap.png"
+
+plot_bgmap(bgMapPath, savePath=savePath)
 
 
 
