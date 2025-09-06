@@ -1,67 +1,51 @@
 import os
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from joblib import Parallel, delayed
 from astropy.table import Table, Column, hstack, join, vstack, MaskedColumn
 
-baseDir = '/raid/scratch/hullyott/cataloguing/current/'
+baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'
 
-def _paralell_SE(filterName, detFilt, imagedata, apDiameterAS, IRACapDiametersAS, 
-             inputSex, dirHere, queue, field, indiDir, overwrite, memory):
-    """ Helps run_source_extractor by parallelising jobs by measurement filter (filterName)"""
-
-    print(f"Starting {filterName}, {detFilt}")
-
-    if filterName[0:2] == 'ch':
-        apDiameterASuse = IRACapDiametersAS
-        print(f'Changing apertures for filter {filterName}, to {apDiameterASuse}')
-    else:
-        apDiameterASuse = apDiameterAS
-
-    return run_se(
-        detFilt, filterName, imagedata, apDiameterASuse, inputSex,
-        dirHere, queue=queue, field=field, outputDir=indiDir,
-        overwrite=overwrite, memory=memory)
-
-def _paralell_fluxes(detectionFilt, apD, spit, fieldName, catString, baseDir, queue, memory):
+def run_all_source_extractors(fieldName, detectionFilters, apDiametersAS, 
+                              queue='none', memory=7, reqFilters=None, 
+                              IRACapDiametersAS=None, overwrite=True, 
+                              se=True, n_jobs=-1):
     """
-    Process a single (detectionFilt, apD) combination.
+    Run source extractor in parallel across detection filters.
+    
+    Parameters
+    ----------
+    fieldName : str
+        The field name being processed.
+    detectionFilters : list
+        List of detection filter names.
+    apDiametersAS : list
+        Aperture diameters.
+    queue : str
+        Queue to submit jobs to.
+    memory : int
+        Memory requirement for job submission.
+    reqFilters : list
+        Required filters.
+    IRACapDiametersAS : list
+        IRAC aperture diameters.
+    overwrite : bool
+        Whether to overwrite existing output.
+    se : bool
+        Whether to actually run SE.
+    n_jobs : int
+        Number of jobs to run in parallel (-1 = all cores).
     """
-    spitstring = f'_IRAC{spit}as' if spit != 'NONE' else ''
-    optstring = f'{apD}as'
 
-    inputCat = (
-        baseDir
-        + 'data/catalogues/{1}/det_{0}/{1}_{4}{0}_{2}{3}.fits'
-    ).format(detectionFilt, fieldName, optstring, spitstring, catString)
-
-    if not os.path.isfile(inputCat):
-        print('Input cat does not exist =', inputCat)
-        return None
-
-    if queue == 'none':
-        print(f'[{detectionFilt}, {apD}] Running in series...')
-        stringSpit = float(spit) if spit != 'NONE' else 'NONE'
-        return flux_errors(
-            inputCat,
-            fieldName,
-            IRACapertureAS=stringSpit,
-            outputType='fits',
-            verbose=False,
-            inputDirProvided=True,
-            removeCoadds=True,
-        )
-    else:
-        print(f'[{detectionFilt}, {apD}] Spawning in the queue')
-        tmpName = f'tmp_myfile_{detectionFilt}_{fieldName}_{optstring}{spitstring}'
-        with open(tmpName + '.sh', 'w') as f:
-            f.write('#!/bin/bash\n')
-            spitstringfloat = float(spit) if spit != 'NONE' else 'NONE'
-            f.write(f'python3 stupid_flux.py {inputCat} {fieldName} {spitstringfloat}\n')
-
-        os.system('chmod +x ' + tmpName + '.sh')
-        command = f"addqueue -c '{tmpName}' -m {memory} -q {queue} -d ./{tmpName}.sh"
-        os.system(command)
-        return None
+    def process_filter(detectionFilt):
+        if se:
+            print(f"Beginning se = True at {datetime.now().strftime('%d/%m %H:%M:%S')}, filter={detectionFilt}")
+            run_source_extractor(fieldName, detectionFilt, apDiametersAS,
+                                 queue=queue, memory=memory, reqFilters=reqFilters,
+                                 IRACapDiametersAS=IRACapDiametersAS,
+                                 overwrite=overwrite)
+    Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(process_filter)(detectionFilt) for detectionFilt in detectionFilters)
 
 def mask_column(ra, dec, regFile, ax = None, verbose = False, tokeep = False, plot = False, hsc = True, xy = False, circlesFile= 'NONE'):
 
@@ -278,6 +262,8 @@ def mask_column(ra, dec, regFile, ax = None, verbose = False, tokeep = False, pl
                 c = SkyCoord(racorn, deccorn, unit = (u.hourangle, u.deg))
                 x = c.ra.degree
                 y = c.dec.degree
+
+            #            print("Polygon", y)
             
             verbose = False
 #            if (np.max(y) > -4.3) & (np.min(y) < -4.3):
@@ -978,10 +964,16 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
     """    
 
     print("Running apply_mask: ", '\n')
+
     from astropy.table import Table #, Column, hstack
     import astropy.io.fits as fits
     from astropy import units as u
     import numpy as np
+    import os
+    print(f"Looking for: {inputCatalogue}")
+    print("Exists?", os.path.exists(inputCatalogue))
+    print("Absolute path:", os.path.abspath(inputCatalogue))
+
     tb = Table.read(inputCatalogue)
     #tb = Table.read(inputCatalogue)
     raData = np.array(tb['RA'].quantity)
@@ -1000,7 +992,7 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
     else:
         print("No ", inputFile, " file exists!  Exiting...")
         exit()
-        
+
     imagedata = Table.read(inputFile, format = 'ascii.commented_header')
 #    imagedata = imagedata[2:3]
     
@@ -1056,7 +1048,6 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
         # exit code
         exit()
 
-
     if cutband != 'none':
 
         # cut according to a given filter!
@@ -1065,7 +1056,13 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
         #print(maskFile)
 
         # check xy!
-        kk = maskFile[0].find('xy')
+        if len(maskFile) == 0:
+            print(f"No mask file found for cutband {cutband}")
+        else:
+            kk = maskFile[0].find('xy')
+            if kk != -1:
+                print("Mask filename contains 'xy'")
+
         if kk > 0:
             tokeep = mask_column(tb['X_IMAGE'], tb['Y_IMAGE'], regDir + maskFile[0], tokeep = True, xy= True)
         else:
@@ -1119,7 +1116,7 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
 
                 fig = plt.figure()
                 ax = plt.subplot()
-                
+                print(inputCatalogue)
                 print("Masking filter {0} with file {1}".format(filt, maskFile))
 
                 # check xy
@@ -1519,9 +1516,8 @@ def apply_mask(inputCatalogue, field, verbose = True, cutband = 'none', save = F
     else:
         return np.invert(maskArray.astype(bool))
 
-def combine_cats(field, detFilt, catalogueTypes, apDiametersAS = [1.8, 2.0, 3.0, 4.0, 5.0], baseDir = '/raid/scratch/hullyott/cataloguing/current/', requiredSpit = ['2.8', '2.8', '2.8', '2.8', '2.8'], IRACapDiametersAS = [2.8, 3.8, 5.8, 9.8, 11.6]):
+def combine_cats(field, detFilt, catalogueTypes, apDiametersAS = [1.8, 2.0, 3.0, 4.0, 5.0], imageDir = '/raid/scratch/data/', requiredSpit = ['2.8', '2.8', '2.8', '2.8', '2.8'], IRACapDiametersAS = [2.8, 3.8, 5.8, 9.8, 11.6]):
     print("Running combine_cats: ", '\n')
-    imageDir = os.path.join(baseDir, 'data/')
 
     # basically combine everything that is available in the directory of this
     dirHere = imageDir + field + '/'
@@ -1538,8 +1534,9 @@ def combine_cats(field, detFilt, catalogueTypes, apDiametersAS = [1.8, 2.0, 3.0,
     print("The available filters are ", availableFilters)
     
     ############################################################
+    
     catDir = imageDir + 'catalogues/'
-    indiDir = catDir + '{1}/det_{0}/'.format(detFilt, field)
+    indiDir = catDir + 'COSMOS/det_{0}/'.format(detFilt)
     
     ## Base table, make a basic table from the detection catalogue
     seCatalogue = indiDir + 'd' + detFilt + '_m' + detFilt + '.fits'
@@ -1636,6 +1633,7 @@ def combine_cats(field, detFilt, catalogueTypes, apDiametersAS = [1.8, 2.0, 3.0,
                 print("Reading ", seCatalogue)
                 tb = Table.read(seCatalogue, hdu = 2)
                 columns = tb.colnames
+
                 
                 ## Do a check that the columns match up
                 #offset = np.array(tb['X_IMAGE']) - np.array(baseTable['X_IMAGE'])
@@ -1740,8 +1738,6 @@ def check_all_files(field, detFilt, imageDir = baseDir + 'data/'):
     return
 
 def run_source_extractor(field, detFilt, apDiameterAS, queue = 'none', reqFilters = ['all'], excludeFilters = ['ch1o', 'ch2o', 'ugriy', 'GRI', 'GR'], interactive = True, overwrite = False, imageDir = baseDir + 'data/', memory = 10.0, IRACapDiametersAS = [2.8, 3.8, 5.8, 9.8, 11.6]):
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-
     print("Running run_source_extractor: ", '\n')
     # Note: removed 'YJ' from excludeFilters.
     # Note: removed 'JH', 'HKs' from excludeFilters.
@@ -1764,6 +1760,7 @@ def run_source_extractor(field, detFilt, apDiameterAS, queue = 'none', reqFilter
     else:
         os.system('mkdir ' + catDir)
         os.system('mkdir ' + indiDir)
+
     
     ###################################################
     ################# Sort filters out ################
@@ -1808,7 +1805,6 @@ def run_source_extractor(field, detFilt, apDiameterAS, queue = 'none', reqFilter
         print("I will now run SE for {0} filters in field {1}, on queue = {2}.".format(availableFilters.size, field, queue))
         print("The filters are ", availableFilters)
         #input("Press enter to continue.")
-    
         
     # check the detection filter exists in catalogue
     detIndex = (availableFilters == detFilt)
@@ -1821,25 +1817,21 @@ def run_source_extractor(field, detFilt, apDiameterAS, queue = 'none', reqFilter
     else:
         detIndex = detIndex[0]
         
+        
     # Change the deblending...
+    
+    for fi, filterName in enumerate(availableFilters):
 
-    #with ProcessPoolExecutor() as executor:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+        if filterName[0:2] == 'ch':
+            apDiameterASuse = IRACapDiametersAS
+            print('Changing apertures for filter {0}, to {1}'.format(filterName, apDiameterASuse))
+            
+        else:
+            apDiameterASuse = apDiameterAS
+            
+        # Now finally run sextractor!
 
-    with ThreadPoolExecutor(max_workers=11) as executor: 
-        futures = {
-            executor.submit(
-                _paralell_SE, f, detFilt, imagedata, apDiameterAS,
-                IRACapDiametersAS, inputSex, dirHere, queue,
-                field, indiDir, overwrite, memory): f for f in availableFilters}
-
-        for fut in as_completed(futures):
-            filterName = futures[fut]
-            try:
-                fut.result()
-                print(f"Finished {filterName}")
-            except Exception as e:
-                print(f"Error with filter {filterName}: {e}")
+        outputCat = run_se(detFilt, filterName, imagedata, apDiameterASuse, inputSex, dirHere, queue = queue, field = field, outputDir = indiDir, overwrite = overwrite, memory = memory)
 
     return
 
@@ -1851,6 +1843,7 @@ def run_se(detFilt, filterName, imagedata, apDiametersAS, inputSex, dirHere, ass
     # extract the images etc for the detection filter
     availFilt = imagedata['Name']
     dd = (availFilt == detFilt)
+
 
     detImage = imagedata['Image'][dd][0]
 
@@ -2017,40 +2010,81 @@ def run_se(detFilt, filterName, imagedata, apDiametersAS, inputSex, dirHere, ass
     print("run_se finished", '\n')
     return outputCat
 
-def spawn_flux_errors(detectionFilters, fields, requiredCats, requiredSpit, catString = 'DR2_MASKVISTA_', queue = 'none', memory = 6):
-    
+def spawn_flux_errors(
+    detectionFilters, fields, requiredCats, requiredSpit,
+    catString='DR2_MASKVISTA_', queue='none', memory=6, n_jobs=12, short_test=False):
+
+    n_jobs = len(detectionFilters)
+    jobs = []  # list to hold flux_errors jobs for parallel execution
+
     for ff, fieldName in enumerate(fields):
-        
         print('#############################################')
         print("Fluxes/errors for field ", fieldName)
-        
-        # --- Main parallel execution ---
-        tasks = []
-        with ThreadPoolExecutor(max_workers=8) as executor:  # adjust workers
-            for df, detectionFilt in enumerate(detectionFilters):
-                print('For det filter', detectionFilt)
 
-                for ai, apD in enumerate(requiredCats):
-                    spit = requiredSpit[ai]
-                    tasks.append(
-                        executor.submit(
-                            _paralell_fluxes,
-                            detectionFilt, apD, spit, fieldName,
-                            catString, baseDir, queue, memory
-                        )
-                    )
+        for df, detectionFilt in enumerate(detectionFilters):
+            print('For det filter ', detectionFilt)
 
-            for fut in as_completed(tasks):
-                try:
-                    result = fut.result()
-                    if result is not None:
-                        print("Flux result:", result)
-                except Exception as e:
-                    print("Error in task:", e)
-            
-    return
+            for ai, apD in enumerate(requiredCats):
+                spitstring = '_IRAC{0}as'.format(requiredSpit[ai])
+                optstring = '{0}as'.format(apD)
+
+                if requiredSpit[ai] == 'NONE':
+                    spitstring = ''
+
+                if apD != 'MAG_AUTO':
+                    inputCat = (
+                        '/raid/scratch/hullyott/cataloguing/DepthsTestDir/data/catalogues/COSMOS/det_{0}/{1}_{4}{0}_{2}{3}.fits').format(detectionFilt, fieldName, optstring, spitstring, catString)
+
+                    if os.path.isfile(inputCat):
+                        if queue == 'none':
+                            # Local parallel execution
+                            if requiredSpit[ai] == 'NONE':
+                                stringSpit = 'NONE'
+                            else:
+                                stringSpit = float(requiredSpit[ai])
+
+                            jobs.append(
+                                delayed(flux_errors)(
+                                    inputCat, fieldName,
+                                    IRACapertureAS=stringSpit,
+                                    outputType='fits',
+                                    verbose=False,
+                                    inputDirProvided=True,
+                                    removeCoadds=True))
+
+                        else:
+                            # Queue submission mode
+                            print('Spawning in the queue ')
+                            tmpName = 'tmp_myfile_{0}_{1}_{2}{3}'.format(
+                                detectionFilt, fieldName, optstring, spitstring
+                            )
+                            with open(tmpName + '.sh', 'w') as f:
+                                f.write('#!/bin/bash\n')
+                                if requiredSpit[ai] == 'NONE':
+                                    spitstringfloat = 'NONE'
+                                else:
+                                    spitstringfloat = float(requiredSpit[ai])
+                                f.write(
+                                    'python3 stupid_flux.py {0} {1} {2}\n'.format(
+                                        inputCat, fieldName, spitstringfloat))
+
+                            # make executable and submit
+                            os.system('chmod +x ' + tmpName + '.sh')
+                            command = "addqueue -c '{1}' -m {2} -q {0} -d ./{1}.sh".format(queue, tmpName, memory)
+                            os.system(command)
+
+                    else:
+                        print('Input cat does not exist = ', inputCat)
+
+    # Run local jobs in parallel if any
+    if queue == 'none' and jobs:
+        print(f"Running {len(jobs)} flux_errors jobs in parallel with n_jobs={n_jobs} at ", datetime.now().strftime("%d/%m %H:%M:%S"))
+        results = Parallel(n_jobs=n_jobs, verbose=10)(jobs)
+        return results
+
+    return None
     
-def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrite = False, minError = 10.0, psfType = 'peak', minErrorIRAC = 10.0, IRACapertureAS = 2.8, depthType = 'grid', depths = [], provFilters = [], outputType = 'fits', verbose = False, inputDirProvided = False, removeCoadds = True, checkFile = 'none', microJyYes = True, xyName = ['X_IMAGE', 'Y_IMAGE'], badFilters = np.array(['NB118']), xmmflag = ['NONE'], countsKey = 'flux_'):
+def flux_errors(inputTableFile, fieldName, dataDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/data/', overwrite = False, minError = 10.0, psfType = 'peak', minErrorIRAC = 10.0, IRACapertureAS = 2.8, depthType = 'grid', depths = [], provFilters = [], outputType = 'fits', verbose = False, inputDirProvided = False, removeCoadds = True, checkFile = 'none', microJyYes = True, xyName = ['X_IMAGE', 'Y_IMAGE'], badFilters = np.array(['NB118']), xmmflag = ['NONE'], countsKey = 'flux_', short_test=False):
     
     """ A function version of my flux errors code.
         
@@ -2083,6 +2117,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
     # read in the input file
     # Check the input file exists
     if os.path.isfile(inputFile) == False:
+        print("line 938")
         print("No ", inputFile, " file exists!  Exiting...")
         exit()
         
@@ -2138,9 +2173,10 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
     inputTableLocation = inputTableFile
     
     tb = Table.read(inputTableLocation)
-    
-    print('Testing on short cat!')
-    tb = tb[np.random.randint(len(tb), size = (50))]
+
+    if short_test:
+        print('Testing on short cat!')
+        tb = tb[np.random.randint(len(tb), size = (50))]
     
     #checkFile = '{0}_delete_check_random1000.fits'.format(fieldName)
 
@@ -2235,14 +2271,14 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
     ##############################################################################
     # Define the aperture correction and local depth files
     if fieldName[0:3] == 'XMM':
-        psfDir = baseDir + 'psf/{0}/enclosedflux/'.format('XMM')
+        psfDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/' + 'psf/{0}/enclosedflux/'.format('XMM')
     elif fieldName[0:4] == 'CDFS':
-        psfDir = baseDir + 'psf/{0}/enclosedflux/'.format('CDFS')
+        psfDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/' + 'psf/{0}/enclosedflux/'.format('CDFS')
     else:
-        psfDir = baseDir + 'psf/{0}/enclosedflux/'.format(fieldName)
+        psfDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/' + 'psf/{0}/enclosedflux/'.format(fieldName)
 
     print('Enclosed flux is coming from directory:', psfDir)
-    depthDir = os.path.join(baseDir, 'depths/{0}/phot/'.format(fieldName))
+    depthDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/COSMOS/phot/' #TODO: check this dir is correct fo rfincal run
   
 ## read in enclosed flux stuff
 #efFile = 'psf/final_enclosedFlux_Oct17.lis'
@@ -2316,7 +2352,8 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
             
             ## Read in a pre-prepared table of depth values
             ## find the closest
-            
+            #if "K" in filterName:
+                #filterName = filterName.split('K')[0] + 'Ks'
             depthTableFile = depthDir + filterName +'_' + apStringHere + 'as_gridDepths{0}.fits'.format(gridString)
             if 'CFHT' in depthTableFile:
                 continue
@@ -2365,7 +2402,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
             depthTableFile = depthDir_R + '{0}_{1}_2.0as_grid_depths.fits'.format(fieldName, filterName_R)
 
             # VIDEO depth directory is slightly different because my depth code is messy
-            if (filterName == 'Y') | (filterName == 'J') | (filterName == 'H') | (filterName == 'K') | (filterName == 'YJ'):
+            if (filterName == 'Y') | (filterName == 'J') | (filterName == 'H') | (filterName == 'Ks') | (filterName == 'YJ'):
                 depthDir_R = '/mnt/vardy/vardygroupshare/HSC_SSP_DR3/depths/{0}/grids/VIDEO/'.format(fieldName)
                 depthTableFile = depthDir_R + '{0}_{1}_2.0as_grid_depths.fits'.format(fieldName, filterName_R)
 
@@ -2412,7 +2449,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
 
                 
                 # deep strips
-                if (filterName == 'Y') | (filterName == 'J') | (filterName == 'H') | (filterName == 'K'):
+                if (filterName == 'Y') | (filterName == 'J') | (filterName == 'H') | (filterName == 'Ks'):
                     # deal with strips
                     minStrip = np.amin(depthHereCol[1:5])
                     maxStrip = np.amax(depthHereCol[1:5])
@@ -2500,6 +2537,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
             else:
                 # read in peak file
                 psfTableFile = psfDir + filterName  + '_peak.txt'
+                print("psfTableFile",psfTableFile)
 
                 # Note from Rohan: reading in the median of the PSFs in CDFS1,2,3. So this will only work when running on CDFS.
                 # I'll turn it off after using it!!
@@ -2507,7 +2545,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
                 if 'CFHT' in filterName:
                     continue
                 encflux = Table.read(psfTableFile, format = 'ascii.commented_header')
-                print(encflux)
+                print("encflux: ",encflux)
                 # extract the right apd
                 ii = (encflux['apD'] > apertureSize-0.01) & (encflux['apD'] < apertureSize+0.01)
 
@@ -2592,7 +2630,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
                 enclosedFlux = aperture_correction(psfTable, apStringHere, x, y)
                 toc = time.time()
                 print("The time to do the enclosed flux is {:4f} seconds. ".format(toc-tic))
-        #print "The enclosed flux is ", enclosedFlux
+        print("The enclosed flux is ", enclosedFlux)
             
         #if filterName == 'Y':
         #    enclosedFlux[:] = 67.2
@@ -2620,6 +2658,7 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
         ## Check that the object is covered by this data set, using the flag
     ## in the magnitudes
         valuesToMask = np.where(tb[filterName] < -90.0)
+        # if magnitude is measured as <-90, mask over it 
         
     ## Convert to fluxes and errors in good units!
         if microJyYes:
@@ -2627,8 +2666,8 @@ def flux_errors(inputTableFile, fieldName, dataDir = baseDir + 'data/', overwrit
                                                       zeropoint, microJy = True, \
                                                       enclosedFlux = enclosedFlux, \
                                                       minErrorPercent = minErrorHere)
-            
-            fluxMicroJy[valuesToMask[0]] = -99.0
+            fluxMicroJy[valuesToMask[0]] = -99.0 
+            # assign a mask value to measured magnitudes <-90
             errorMicroJy[valuesToMask[0]] = -99.0
             
     ## add to table
@@ -3237,18 +3276,20 @@ def flux_conv(fluxCounts, fiveSigmaArray, zpt, microJy = True, cgs = False, minE
         print('NANS found here in fiveSigma array')
         exit()
         
-    rem = fiveSigmaArray < 1.0
+    rem = fiveSigmaArray < 1.0 # if any of the elements in 5sigArr<1, True
+
     fiveSigmaArray_allPositive = fiveSigmaArray
     if np.any(rem):
-        fiveSigmaArray_allPositive[rem] = 1.0
+        fiveSigmaArray_allPositive[rem] = 1.0 # if any element is rem, assign 1
+        print("reassigned depth array element to 1 ", fiveSigmaArray_allPositive[rem])
     
     if microJy:
         # simply convert flux counts into microJy
+        print("zpt, fluxCounts: ", zpt, fluxCounts)
         fluxFinal = 3631000000.0*(10**(-zpt/2.5))*fluxCounts.squeeze()
-        
+        print("fluxFinal ", fluxFinal)
         # now convert the five sigma array into fluxes
         errorArray_allPositive = 726200000.0*(10**(-fiveSigmaArray/2.5))
-        
         
     if cgs:
         # convert to cgs!
@@ -3258,24 +3299,29 @@ def flux_conv(fluxCounts, fiveSigmaArray, zpt, microJy = True, cgs = False, minE
         # and the five sigma array
         value = -(48.6 + fiveSigmaArray)/2.5
         errorArray_allPositive = 0.2*(10**value)
-    
-    
+
     ##print fluxCounts
     # Check that the minimum error is in place
     if minErrorPercent > 0.0:
+        print("minErrorPercent > 0.0 ",  minErrorPercent)
+        print("errorArray_allPositive: ", errorArray_allPositive)
         tooSmall = errorArray_allPositive < (minErrorPercent/100.0)*fluxFinal.squeeze()
         if np.any(tooSmall):
+            print("too small: True ",errorArray_allPositive[tooSmall])
             errorArray_allPositive[tooSmall] = (minErrorPercent/100.0) * fluxFinal.squeeze()[tooSmall]
+            print("too small: True ",errorArray_allPositive[tooSmall])
 
     errorFinal = errorArray_allPositive
     if np.any(rem):
+        print("rem=yes", errorFinal[rem])
         errorFinal[rem] = -99.0
-    
-    # 
 
     ## correct for the enclosed flux!
     fluxFinal = fluxFinal*100.0/enclosedFlux
     errorFinal = errorFinal*100.0/enclosedFlux
+    print("enclosedFlux!!!",enclosedFlux)
+    print(fluxFinal)
+    print(errorFinal)
     
     return fluxFinal, errorFinal
 
@@ -3602,5 +3648,4 @@ def compare_plot_phot(inputCat, filterA = 'NONE', filterB = 'NONE', radiusCat = 
     plotname = outputDir + '{0}_{1}.png'.format(filterA, filterB)
     fig.savefig(plotname)
     print(plotname)
-    print("compare_phot line 3056 finished", '\n')
     return

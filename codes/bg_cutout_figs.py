@@ -1,6 +1,6 @@
 
 # Global stuff
-baseDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/'
+baseDir = '/raid/scratch/hullyott/cataloguing/current/'
 import os
 import warnings
 import numpy as np
@@ -441,7 +441,7 @@ def bg_subtraction(zeropoint, cutouts=[], size='none', back_size=32, back_filter
         else:
             print(f"The SEG and/or BG subtracted map exist at: {segPath, bgSubPath} \n")
 
-def plot_bgmap(bgMapPath, savePath=None, cmap='binary', vmin=None, vmax=None):
+def plot_bgmap(dataPath, bgSubPath, bgMapPath, savePath=None, cmap='binary', vmin=None, vmax=None):
     """
     Make a figure of the background map produced by Source Extractor.
     
@@ -458,23 +458,39 @@ def plot_bgmap(bgMapPath, savePath=None, cmap='binary', vmin=None, vmax=None):
     """
     # load the fits bgmap
     with fits.open(bgMapPath) as hdul:
-        data = hdul[0].data
+        mapData = hdul[0].data
+    with fits.open(dataPath) as hdul:
+            imgData = hdul[0].data
+    with fits.open(bgSubPath) as hdul:
+            subData = hdul[0].data
 
     # Apply z-scaling
     zscale = ZScaleInterval()
-    vmin, vmax = zscale.get_limits(data)
+    vmin, vmax = zscale.get_limits(imgData)
 
     formatter = ScalarFormatter(useMathText=False)
     formatter.set_scientific(False)
     formatter.set_useOffset(False)
 
-    plt.figure(figsize=(8, 6))
+    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(12, 8))
+    ax = axes[0]
+    im0 = ax.imshow(imgData, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
+    ax.set_title(f"{os.path.basename(dataPath).replace('.fits','')}")
+    ax.set_xlabel("X (pixels)")
+    ax.set_ylabel("Y (pixels)")
 
-    plt.imshow(data, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
-    plt.colorbar(label="Background level")
-    plt.title(f"Background map: {os.path.basename(bgMapPath)}")
-    plt.xlabel("X (pixels)")
-    plt.ylabel("Y (pixels)")
+    ax = axes[1]
+    im1 = ax.imshow(subData, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
+    ax.set_title(f"{os.path.basename(bgSubPath).replace('.fits','')}")
+    ax.set_xlabel("X (pixels)")
+    ax.set_ylabel("Y (pixels)")
+    
+    ax = axes[2]
+    im2 = ax.imshow(mapData, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
+    #fig.colorbar(im2, ax=axes[2], label="Background level")
+    ax.set_title(f"{os.path.basename(bgMapPath).replace('.fits','')}")
+    ax.set_xlabel("X (pixels)")
+    ax.set_ylabel("Y (pixels)")
     
     if savePath:
         plt.savefig(savePath, dpi=150, bbox_inches='tight')
@@ -484,22 +500,34 @@ def plot_bgmap(bgMapPath, savePath=None, cmap='binary', vmin=None, vmax=None):
         plt.show()
 
 filt = 'Y'
-size_arcsec = 500 # TODO: testing on different sizes
-back_size = 4
-back_filtersize = 1
+size_arcsec = 250 # TODO: testing on different sizes
+back_size = 32
+back_filtersize = 9
 cutouts = prep(size_arcsec=size_arcsec, centre_ra=149.5, centre_dec=2.2, filters=[f'{filt}']) # TODO: doesn't work for len(filter lists)>1
+
+
 bg_subtraction(zeropoint=30, cutouts=cutouts, size=size_arcsec, back_size=back_size, back_filtersize=back_filtersize)
 
-bgMapDir = '/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/COSMOS_bgFigs/images/'
+bgMapDir = os.path.join(baseDir, 'depths/COSMOS_bgFigs/images/')
+dataDir = os.path.join(baseDir, 'data/COSMOS/cutouts/')
+
 size_arcsec = str(size_arcsec)
 back_size = str(back_size)
 back_filtersize = str(back_filtersize)
 
-bgMapName = f'{filt}{size_arcsec}_cutout_bgmap.fits'
-bgMapPath = bgMapDir + bgMapName
-savePath = savePath=f"/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/COSMOS_bgFigs/bg_maps/{filt}_{back_size}_{back_filtersize}_bgmap.png"
+bgMapName = f'{filt}{size_arcsec}_{back_size}_{back_filtersize}_cutout_bgmap.fits'
+bgSubName = f'{filt}{size_arcsec}_{back_size}_{back_filtersize}_cutout_bgsub.fits'
+if 'HSC_' in filt:
+        dataName = f'{filt}_DR3_1495_22_size{size_arcsec}.fits' # TODO: won't update if position changes
+elif 'HSC_' not in filt:
+    dataName = f'UVISTA_{filt}_DR6_1495_22_size{size_arcsec}.fits' # TODO: won't update if position changes
 
-plot_bgmap(bgMapPath, savePath=savePath)
+bgMapPath = bgMapDir + bgMapName
+bgSubPath = bgMapDir + bgSubName
+dataPath = dataDir + dataName
+savePath = savePath=f"/raid/scratch/hullyott/cataloguing/DepthsTestDir/depths/COSMOS_bgFigs/bg_maps/{filt}_{size_arcsec}as_{back_size}_{back_filtersize}_bgmap.png"
+
+plot_bgmap(dataPath, bgSubPath, bgMapPath, savePath=savePath)
 
 
 

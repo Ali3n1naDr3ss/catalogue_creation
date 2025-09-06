@@ -1851,7 +1851,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
         param_file = baseDir + 'data/bertin_config/default.param'
 
         if cutouts != 'none': 
-            segPath = imageDir + filterName + size +'_cutout_seg.fits'  
+            segPath = imageDir + filterName + size +'_cutout_seg.fits'
             bgSubPath = imageDir  + filterName + size + '_cutout_bgsub.fits'
             bgMapPath = imageDir  + filterName + size + '_cutout_bgmap.fits'
             outputCatalogue = catDir + 'd' + size + filterName + '_cutout.fits'
@@ -1861,7 +1861,7 @@ def image_depth(imagePath, zeropoint, cutouts=[], size='none', back_size=32, bac
             bgSubDict['back_filtersize'] = back_filtersize
         else:
             outputCatalogue = catDir + 'd' + filterName + '.fits'
-            segPath = imageDir + filterName + '_seg.fits'  
+            segPath = imageDir + filterName + '_seg.fits'
             bgMapPath = imageDir  + filterName + '_bgmap.fits'
             bgSubPath = imageDir  + filterName + '_bgsub.fits'
             # dict used in bg_plotter

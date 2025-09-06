@@ -26,7 +26,7 @@ fields = ['COSMOS']
 # 'Y', 'J', 'H', 'K', 'JH', 'HK'
 # 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y'
 reqFilters = ['Y', 'J', 'H', 'K', 'JH', 'HK', 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y']  # <<<<<<<<<< may want to change 
-size_arcsec = 100 #'full_size'         # <<<<<<<<<< may want to change 
+size_arcsec = 100 #'full_size'       # <<<<<<<<<< may want to change 
 saveFig = True            # <<<<<<<<<< may want to change 
 
 centre_ra = 149.5         # <<<<<<<<<< may want to change 
