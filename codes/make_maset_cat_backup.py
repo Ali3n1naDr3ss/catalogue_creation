@@ -178,14 +178,18 @@ def make_small_test_cat(filters, size=50):
         shortCat.write(combinedCatPath.replace(".fits", "_short.fits"), overwrite=True)
 
 # match by RA/Dec with maximum 1as seperation 
-def match_objs(verbose=False):
+def match_objs(testing=True, verbose=False):
 
     import astropy.units as u
     from scipy.spatial import cKDTree # works in Cartesian, https://youtu.be/TLxWtXEbtFE
     from astropy.coordinates import SkyCoord, search_around_sky, match_coordinates_sky # couldn't get s_a_s nor m_c_s to work # TODO: look at source code to see if/how Astropy make their search robust against missed nearest neighbours
     
-    combinedCatPath = os.path.join(globalCatDir, "combined_cat_short.fits") #TODO: "combined_cat.fits" full version
-    print("Reading table...")
+    if testing :
+        combinedCatPath = os.path.join(globalCatDir, "combined_cat_short.fits") #TODO: "combined_cat.fits" full version
+    else:
+        combinedCatPath = os.path.join(globalCatDir, "combined_cat.fits") #TODO: "combined_cat.fits" full version
+    
+    print("Reading table ", os.path.basename(combinedCatPath), "...")
     table = Table.read(combinedCatPath) # the huge table with cols from every detFilt
 
     # make coordinate-like objects to use with search_around_sky
@@ -199,6 +203,7 @@ def match_objs(verbose=False):
         # replace maksed values with nan
         ra = np.ma.MaskedArray(ra).filled(np.nan)
         dec = np.ma.MaskedArray(dec).filled(np.nan)
+
 
         # make into arrays of floats
         ra = np.array(ra, dtype=float)
@@ -226,21 +231,20 @@ def match_objs(verbose=False):
  
         # manual attempt
         # Build KDTree for catalog 1
+        print(coords1)
         tree1 = cKDTree(coords1)
 
         # Query nearest neighbor in cat1 for each point in cat2
-        k=10
-        distances, indices = tree1.query(coords2, k=k) #TODO: when using full-size cat, need to increase k (no of NN to return)
+        distances, indices = tree1.query(coords2, k=1e6) #TODO: when using full-size cat, need to increase k (no of NN to return)
         idx1, idx2 = indices # idx1 indeces of NN in cat1
         # distances to the nearest neighbors, indecies of the NNs in the cats
         # Missing neighbors are indicated with infinite distances. Hits are sorted by distance (nearest first).
 
 
         ### Do manual and visual checks of nearest neighbours
-        if verbose:
-            print("Found nearest neighbours: ")
-            for j in range(len(idx1)):
-                print("coords: ", coords1[0][idx1[j]], coords2[0][idx2[j]], "seperation: ", abs(coords2[0][idx2[j]] - coords1[0][idx1[j]]))
+        print("Found nearest neighbours... ")
+        #for j in range(len(idx1)):
+            #print("coords: ", coords1[0][idx1[j]], coords2[0][idx2[j]], "seperation: ", abs(coords2[0][idx2[j]] - coords1[0][idx1[j]]))
         ## visual checks
         central_points1 =  coords1[0][idx1], coords1[1][idx1] # RA/Dec of NN from cat 1
         central_points2 =  coords2[0][idx2], coords2[1][idx2] # RA/Dec of NN from cat 2
@@ -273,8 +277,6 @@ def match_objs(verbose=False):
 
         plt.show()
         breakpoint()
-
-
        
 
         '''

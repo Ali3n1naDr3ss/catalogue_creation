@@ -10,10 +10,7 @@ import os
 import time
 import numpy as np
 from datetime import datetime
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 from astropy.table import Table, hstack, join
-from astropy.coordinates import SkyCoord, search_around_sky
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 baseDir = '/raid/scratch/hullyott/cataloguing/current/'
@@ -145,68 +142,33 @@ def join_cats():
     command = f'topcat {combinedCatPath} &'
     #os.system(command)
 
-def make_small_test_cat(filters, size=50):
-    import os
-    import numpy as np  
-    import astropy.units as u
-    from astropy.table import Table
-    from astropy.coordinates import SkyCoord
-
-    baseDir = '/raid/scratch/hullyott/cataloguing/current/'
-    globalCatDir = os.path.join(baseDir,  'data/catalogues/COSMOS_make_master_test/')
-
-    combinedCatPath = os.path.join(globalCatDir, "combined_cat.fits")
-    print("Reading large table to make short cat...")
-    table = Table.read(combinedCatPath) # the huge table with cols from every detFilt
-
-    coordsDict = {} # pre-load all coords b4 matching
-    
-    for filt in filters:
-
-        ra = table[f'RA_{filt}']
-        ra = np.ma.MaskedArray(ra).filled(np.nan)
-        ra = np.array(ra, dtype=float)
-        idx = len(ra) // 2
-
-        mid_ra = table[idx][f'RA_{filt}']
-        mid_dec = table[idx][f'DEC_{filt}']
-
-        start = int(idx - size/2)
-        stop  = int(idx + size/2)
-
-        shortCat = table[start:stop]
-        shortCat.write(combinedCatPath.replace(".fits", "_short.fits"), overwrite=True)
-
 # match by RA/Dec with maximum 1as seperation 
-def match_objs(verbose=False):
+def match_objs():
 
     import astropy.units as u
-    from scipy.spatial import cKDTree # works in Cartesian, https://youtu.be/TLxWtXEbtFE
-    from astropy.coordinates import SkyCoord, search_around_sky, match_coordinates_sky # couldn't get s_a_s nor m_c_s to work # TODO: look at source code to see if/how Astropy make their search robust against missed nearest neighbours
+    from astropy.coordinates import SkyCoord, search_around_sky
     
-    combinedCatPath = os.path.join(globalCatDir, "combined_cat_short.fits") #TODO: "combined_cat.fits" full version
-    print("Reading table...")
+    combinedCatPath = os.path.join(globalCatDir, "combined_cat.fits")
+    print("Reading large table...")
     table = Table.read(combinedCatPath) # the huge table with cols from every detFilt
-
+    seplimit = 1 * u.arcsec 
+    
     # make coordinate-like objects to use with search_around_sky
-    coordsDict = {} # pre-load all coords b4 matching for speed
+    coordsDict = {} # pre-load all coords b4 matching
     
     for filt in detectionFilters:
         # get coords for filt
         ra = table[f'RA_{filt}']
         dec = table[f'DEC_{filt}']
-
         # replace maksed values with nan
-        ra = np.ma.MaskedArray(ra).filled(np.nan)
-        dec = np.ma.MaskedArray(dec).filled(np.nan)
-
-        # make into arrays of floats
+        ra = np.ma.MaskedArray(ra).filled(0.0)
+        dec = np.ma.MaskedArray(dec).filled(0.0)
+        #make into arrays of floats
         ra = np.array(ra, dtype=float)
         dec = np.array(dec, dtype=float)
 
         # make into a 1D coord array
-        #coordsDict[filt] = SkyCoord(ra=ra * u.deg, dec=dec * u.deg) # for search_around_sky attempt
-        coordsDict[filt] = np.array([ra, dec])                       # for manual attempt
+        coordsDict[filt] = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
 
     for i, df in enumerate(detectionFilters[:-1]):
         coords1 = coordsDict[df]
@@ -217,81 +179,47 @@ def match_objs(verbose=False):
             print(f"Skipping {df} vs {detectionFilters[i+1]} (no valid coords)")
             continue
 
-        """
-        # search_around_sky attempt
+        print("Matching:", df, "vs", detectionFilters[i+1])
 
-        seplimit = 1 * u.arcsec # maximum allowed seperation to be considered the same object
-        idx1, idx2, sep2d, _ = coords1.search_around_sky(coords2, seplimit)
-        """
- 
-        # manual attempt
-        # Build KDTree for catalog 1
-        tree1 = cKDTree(coords1)
-
-        # Query nearest neighbor in cat1 for each point in cat2
-        k=10
-        distances, indices = tree1.query(coords2, k=k) #TODO: when using full-size cat, need to increase k (no of NN to return)
-        idx1, idx2 = indices # idx1 indeces of NN in cat1
-        # distances to the nearest neighbors, indecies of the NNs in the cats
-        # Missing neighbors are indicated with infinite distances. Hits are sorted by distance (nearest first).
+        print("lllll", df, detectionFilters[i+1], coords1, coords2)
+        idx, sep2d, sep3d = match_coordinates_sky(coords1, coords2)
 
 
-        ### Do manual and visual checks of nearest neighbours
-        if verbose:
-            print("Found nearest neighbours: ")
-            for j in range(len(idx1)):
-                print("coords: ", coords1[0][idx1[j]], coords2[0][idx2[j]], "seperation: ", abs(coords2[0][idx2[j]] - coords1[0][idx1[j]]))
-        ## visual checks
-        central_points1 =  coords1[0][idx1], coords1[1][idx1] # RA/Dec of NN from cat 1
-        central_points2 =  coords2[0][idx2], coords2[1][idx2] # RA/Dec of NN from cat 2
-        
-        # draw circle of radius 1as for validation
-        maxsep_dimless = 1/3600 # 1 arcsec
-        maxsep = maxsep_dimless * u.arcsec # maximum allowed seperation to be considered the same object
-        
-        central_x1 = coords1[1][idx1] # dec
-        central_y1 = coords1[0][idx1] # RA
+    # neither search_around_sky, nor match_coordinates_sky work
+    # alternate approach
+    from scipy.spatial import cKDTree
+    import numpy as np
 
-        fig, ax = plt.subplots(figsize=(6, 6))
+    # Convert to unit vectors
+    x1 = np.cos(coords1.ra.rad) * np.cos(coords1.dec.rad)
+    y1 = np.sin(coords1.ra.rad) * np.cos(coords1.dec.rad)
+    z1 = np.sin(coords1.dec.rad)
+    xyz1 = np.column_stack([x1, y1, z1])
 
-        # Set limits and equal aspect before adding circles
-        ax.set_xlim(min(central_points1[1].min(), central_points2[1].min()) - maxsep_dimless,
-                    max(central_points1[1].max(), central_points2[1].max()) + maxsep_dimless)
-        ax.set_ylim(min(central_points1[0].min(), central_points2[0].min()) - maxsep_dimless,
-                    max(central_points1[0].max(), central_points2[0].max()) + maxsep_dimless)
-        ax.set_aspect('equal', adjustable='datalim')  # ensures 1:1 scaling
+    x2 = np.cos(coords2.ra.rad) * np.cos(coords2.dec.rad)
+    y2 = np.sin(coords2.ra.rad) * np.cos(coords2.dec.rad)
+    z2 = np.sin(coords2.dec.rad)
+    xyz2 = np.column_stack([x2, y2, z2])
 
-        for l in range(len(central_x1)):
-            validation_circle = Circle((central_x1[l], central_y1[l]), maxsep_dimless, fill=False, edgecolor='magenta', linewidth=1)
-            ax.add_patch(validation_circle)
+# cKDTree - class provides an index into a set of k-dimensional points which can be used to quickly look-up the nearest neighbors of any point
+# https://youtu.be/TLxWtXEbtFE
+# is only an approximate technique - some nearest neightbours may be missed
+tree1 = cKDTree(xyz1)
+tree2 = cKDTree(xyz2)
 
-        ax.scatter(central_points1[1], central_points1[0], marker='.', color='red')
-        ax.scatter(central_points2[1], central_points2[0], marker='.', color='green')
-        ax.set_xlabel("Dec (deg)")
-        ax.set_ylabel("RA (deg)")
-        plt.title(f"Nearest Neighbours in Band {df}")
-
-        plt.show()
-        breakpoint()
+# Find all pairs within a given angular separation (in radians)
+r = 2 * np.sin(0.5 * seplimit.to_value(u.rad))
+pairs = tree1.query_ball_tree(tree2, r)
 
 
-       
+   
+    #idx1, idx2, sep2d, _ = search_around_sky(coords1, coords2, seplimit)
 
-        '''
-        # cKDTree - class provides an index into a set of k-dimensional points which can be used to quickly look-up the nearest neighbors of any point
-        # https://youtu.be/TLxWtXEbtFE
-        # is only an approximate technique - some nearest neightbours may be missed
-        tree1 = cKDTree(xyz1) # ra/dec space of points split by the median along each axis into quadrants
-        tree2 = cKDTree(xyz2) # th nearest neighbour (NN) in each quadrat is assigned as NN - not perfect, but fast
+    print(f"Matched {df} with {detectionFilters[i+1]}: {len(idx1)} matches")
+    # idx1 -> indices in cat
+    # idx2 -> indices in cat2
+    # sep2d -> angular separation
 
-        # Find all pairs within a given angular separation
-        maxsep = 1 * u.arcsec # maximum allowed seperation to be considered the same object
-        #r = 2 * np.sin(0.5 * maxsep.to_value(u.rad)) # assuming the sky is a sphere (in radians)
-        r = maxsep # assuming the sky is flat
-        pairs = tree1.query_ball_tree(tree2, r)'''
-
-
-  
 
 
 #####################################################################################################################################
@@ -300,7 +228,6 @@ def match_objs(verbose=False):
 #modify colnames to preserve detFilt_measFilt
 #run_parallel(modify_colnames, detectionFilters, max_workers=len(detectionFilters), use_processes=False)
 #join_cats()
-#make_small_test_cat(detectionFilters, size=100)
 match_objs()
 #run_parallel(func, input, max_workers=len(detectionFilters), use_processes=False)
 
