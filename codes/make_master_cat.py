@@ -178,14 +178,21 @@ def make_small_test_cat(filters, size=50):
         shortCat.write(combinedCatPath.replace(".fits", "_short.fits"), overwrite=True)
 
 # match by RA/Dec with maximum 1as seperation 
-def match_objs(verbose=False):
+def match_objs(maxsep, testing=True, verbose=False):
+    """ 
+    maxsep (arcsec) maximum allowed seperation across different band images (in arcseconds) to be considered the same object 
+    """
 
     import astropy.units as u
     from scipy.spatial import cKDTree # works in Cartesian, https://youtu.be/TLxWtXEbtFE
     from astropy.coordinates import SkyCoord, search_around_sky, match_coordinates_sky # couldn't get s_a_s nor m_c_s to work # TODO: look at source code to see if/how Astropy make their search robust against missed nearest neighbours
     
-    combinedCatPath = os.path.join(globalCatDir, "combined_cat_short.fits") #TODO: "combined_cat.fits" full version
-    print("Reading table...")
+    if testing :
+        combinedCatPath = os.path.join(globalCatDir, "combined_cat_short.fits") #TODO: "combined_cat.fits" full version
+    else:
+        combinedCatPath = os.path.join(globalCatDir, "combined_cat.fits") #TODO: "combined_cat.fits" full version
+    
+    print("Reading table ", os.path.basename(combinedCatPath), "...")
     table = Table.read(combinedCatPath) # the huge table with cols from every detFilt
 
     # make coordinate-like objects to use with search_around_sky
@@ -208,6 +215,7 @@ def match_objs(verbose=False):
         #coordsDict[filt] = SkyCoord(ra=ra * u.deg, dec=dec * u.deg) # for search_around_sky attempt
         coordsDict[filt] = np.array([ra, dec])                       # for manual attempt
 
+    nnDict = {}
     for i, df in enumerate(detectionFilters[:-1]):
         coords1 = coordsDict[df]
         if detectionFilters[i+1] in coordsDict:
@@ -229,66 +237,70 @@ def match_objs(verbose=False):
         tree1 = cKDTree(coords1)
 
         # Query nearest neighbor in cat1 for each point in cat2
-        k=10
+        k = len(detectionFilters)
         distances, indices = tree1.query(coords2, k=k) #TODO: when using full-size cat, need to increase k (no of NN to return)
         idx1, idx2 = indices # idx1 indeces of NN in cat1
+        nnDict[df] = idx1
+        nnDict[detectionFilters[i+1]] = idx2
+        # k = Either number of NN to return, or list of k-th NN to return, starting from 1.
         # distances to the nearest neighbors, indecies of the NNs in the cats
         # Missing neighbors are indicated with infinite distances. Hits are sorted by distance (nearest first).
 
+        print(f"Found nearest neighbours in filters {df} and {detectionFilters[i+1]}... ")
 
-        ### Do manual and visual checks of nearest neighbours
-        if verbose:
-            print("Found nearest neighbours: ")
-            for j in range(len(idx1)):
-                print("coords: ", coords1[0][idx1[j]], coords2[0][idx2[j]], "seperation: ", abs(coords2[0][idx2[j]] - coords1[0][idx1[j]]))
-        ## visual checks
-        central_points1 =  coords1[0][idx1], coords1[1][idx1] # RA/Dec of NN from cat 1
-        central_points2 =  coords2[0][idx2], coords2[1][idx2] # RA/Dec of NN from cat 2
-        
-        # draw circle of radius 1as for validation
-        maxsep_dimless = 1/3600 # 1 arcsec
-        maxsep = maxsep_dimless * u.arcsec # maximum allowed seperation to be considered the same object
-        
-        central_x1 = coords1[1][idx1] # dec
-        central_y1 = coords1[0][idx1] # RA
+    ### Do visual checks of nearest neighbours
+    # plot each of the nearest neightbours across the bands one one image. draw a max-sep circle to visually verify they are the same object
 
-        fig, ax = plt.subplots(figsize=(6, 6))
+    maxsep_dimless = maxsep/3600 # 1 arcsec
 
-        # Set limits and equal aspect before adding circles
-        ax.set_xlim(min(central_points1[1].min(), central_points2[1].min()) - maxsep_dimless,
-                    max(central_points1[1].max(), central_points2[1].max()) + maxsep_dimless)
-        ax.set_ylim(min(central_points1[0].min(), central_points2[0].min()) - maxsep_dimless,
-                    max(central_points1[0].max(), central_points2[0].max()) + maxsep_dimless)
-        ax.set_aspect('equal', adjustable='datalim')  # ensures 1:1 scaling
+    fig, ax = plt.subplots(figsize=(6, 6))
+    cm = plt.cm.get_cmap("rainbow") # TODO double check filt correspond to colour: short -> long wl
 
-        for l in range(len(central_x1)):
-            validation_circle = Circle((central_x1[l], central_y1[l]), maxsep_dimless, fill=False, edgecolor='magenta', linewidth=1)
+    # Set limits and equal aspect before adding circles
+    ax.set_xlim(min(coordsDict[df][1][nnDict[df]]) - 0.5, max(coordsDict[df][1][nnDict[df]]) + 0.5)
+    ax.set_ylim(min(coordsDict[df][0][nnDict[df]]) - 0.5,max(coordsDict[df][0][nnDict[df]]).max() + 0.5)
+    ax.set_aspect('equal', adjustable='datalim')  # ensures 1:1 scaling
+    a =  len(detectionFilters)
+
+    for i, df in enumerate(detectionFilters[:-1]):
+        colour = cm(i/a)
+        # plot the scatter points
+        ax.scatter(coordsDict[df][1][nnDict[df]], coordsDict[df][0][nnDict[df]], marker='.', color=colour, label=df)
+
+        # loop over *all* matched indices
+        for j in nnDict[df]:
+            validation_circle = Circle(
+                (coordsDict[df][1][j], coordsDict[df][0][j]),
+                maxsep_dimless, fill=False, edgecolor='magenta', linewidth=1)
             ax.add_patch(validation_circle)
 
-        ax.scatter(central_points1[1], central_points1[0], marker='.', color='red')
-        ax.scatter(central_points2[1], central_points2[0], marker='.', color='green')
-        ax.set_xlabel("Dec (deg)")
-        ax.set_ylabel("RA (deg)")
-        plt.title(f"Nearest Neighbours in Band {df}")
+    if detectionFilters[i+1] in coordsDict:
+        colour = cm(i/a)
+        df = detectionFilters[i+1]
+        validation_circle = Circle(
+                (coordsDict[df][1][j], coordsDict[df][0][j]),
+                maxsep_dimless, fill=False, edgecolor='magenta', linewidth=1)
+        ax.add_patch(validation_circle)
 
-        plt.show()
-        breakpoint()
-
-
+    ax.set_xlabel("Dec (deg)")
+    ax.set_ylabel("RA (deg)")
+    plt.title(f"Nearest Neighbours")
+    plt.legend()
+    plt.show()
        
 
-        '''
-        # cKDTree - class provides an index into a set of k-dimensional points which can be used to quickly look-up the nearest neighbors of any point
-        # https://youtu.be/TLxWtXEbtFE
-        # is only an approximate technique - some nearest neightbours may be missed
-        tree1 = cKDTree(xyz1) # ra/dec space of points split by the median along each axis into quadrants
-        tree2 = cKDTree(xyz2) # th nearest neighbour (NN) in each quadrat is assigned as NN - not perfect, but fast
+    '''
+    # cKDTree - class provides an index into a set of k-dimensional points which can be used to quickly look-up the nearest neighbors of any point
+    # https://youtu.be/TLxWtXEbtFE
+    # is only an approximate technique - some nearest neightbours may be missed
+    tree1 = cKDTree(xyz1) # ra/dec space of points split by the median along each axis into quadrants
+    tree2 = cKDTree(xyz2) # th nearest neighbour (NN) in each quadrat is assigned as NN - not perfect, but fast
 
-        # Find all pairs within a given angular separation
-        maxsep = 1 * u.arcsec # maximum allowed seperation to be considered the same object
-        #r = 2 * np.sin(0.5 * maxsep.to_value(u.rad)) # assuming the sky is a sphere (in radians)
-        r = maxsep # assuming the sky is flat
-        pairs = tree1.query_ball_tree(tree2, r)'''
+    # Find all pairs within a given angular separation
+    maxsep = 1 * u.arcsec # maximum allowed seperation to be considered the same object
+    #r = 2 * np.sin(0.5 * maxsep.to_value(u.rad)) # assuming the sky is a sphere (in radians)
+    r = maxsep # assuming the sky is flat
+    pairs = tree1.query_ball_tree(tree2, r)'''
 
 
   
@@ -300,8 +312,8 @@ def match_objs(verbose=False):
 #modify colnames to preserve detFilt_measFilt
 #run_parallel(modify_colnames, detectionFilters, max_workers=len(detectionFilters), use_processes=False)
 #join_cats()
-#make_small_test_cat(detectionFilters, size=100)
-match_objs()
+#make_small_test_cat(detectionFilters, size=500)
+match_objs(1)
 #run_parallel(func, input, max_workers=len(detectionFilters), use_processes=False)
 
 
