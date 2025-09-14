@@ -14,8 +14,10 @@ import matplotlib.pyplot as plt
 from itertools import combinations
 from matplotlib.patches import Circle
 from astropy.table import Table, hstack, join
+from matplotlib.collections import PatchCollection
 from astropy.coordinates import SkyCoord, search_around_sky
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+
 
 baseDir = '/raid/scratch/hullyott/cataloguing/current/'
 globalCatDir = os.path.join(baseDir,  'data/catalogues/COSMOS_make_master_test/')
@@ -67,6 +69,18 @@ def run_parallel(func, items, max_workers=24, use_processes=False,):
     print(f"Finished {func.__name__} in {elapsed:.2f} seconds.")
 
     return results
+
+def process_pair_numpy(df1, df2, coordsDict, nnIDdict):
+    """
+    Quickly computes validation circles, ready for plotting
+    """
+    df1_idx = nnIDdict[df1].ravel()
+    df2_idx = nnIDdict[df2].ravel()
+
+    df1_coords = np.column_stack((coordsDict[df1][0][df1_idx], coordsDict[df1][1][df1_idx]))
+    df2_coords = np.column_stack((coordsDict[df2][0][df2_idx], coordsDict[df2][1][df2_idx]))
+
+    return np.vstack((df1_coords, df2_coords))
 
 ### modify col names so that each col is traceable to the detection catalogue i.e. flux_Y_Y is from data/catalogues/dY_mY.fits
 def modify_colnames(detFilt):
@@ -218,6 +232,7 @@ def find_nearest(maxsep, size, testing=True, verbose=False):
         coordsDict[filt] = np.array([ra, dec])                       # for manual attempt
 
     nnIDdict = {}
+    print("Finding nearest neighbours...", datetime.now().strftime("%H:%M:%S"))
     for df1, df2 in combinations(detectionFilters, 2):  # compare all unique pairs
         coords1 = np.array(coordsDict[df1]).T # transopse to shape (N, 2) for cKDTree
         coords2 = np.array(coordsDict[df2]).T# shape (M, 2)
@@ -251,7 +266,57 @@ def find_nearest(maxsep, size, testing=True, verbose=False):
 
     return nnIDdict, coordsDict
 
-def nn_plotter(coordsDict, nnIDdict, maxsep, testing=True):
+def nn_plotter(coordsDict, nnIDdict, maxsep_as, testing=True):
+    """
+    Plots a circle of radius maxsep around each of the points provided. 
+    Provided points should be the nearest neighbours found by KDTree.
+
+    coordsDict{dict}    All coordinates (degrees) in the combined (or test) catalogue for each of the detection filters {filt: Ra, Dec}
+    nnIDdict{dict}      Indices of the nearest neighbours found by KDTree {filt: [idx]}
+    maxsep(int/float)   Maximum allowed seperation across different band images (in arcseconds) to be considered the same object 
+    """
+    print("Making figure... ", datetime.now().strftime("%H:%M:%S"))
+    maxsep = maxsep_as / 3600
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # Collect all circles at once
+    all_coords = []
+    for df1, df2 in combinations(detectionFilters, 2):
+        # Set limits and aspect
+        ax.set_xlim(min(coordsDict[df1][0]) - 0.1, max(coordsDict[df1][0]) + 0.1)
+        ax.set_ylim(min(coordsDict[df1][1]) - 0.1, max(coordsDict[df1][1]) + 0.1)
+        ax.set_aspect('equal', adjustable='datalim')
+
+        coords = process_pair_numpy(df1, df2, coordsDict, nnIDdict)
+        all_coords.append(coords)
+    all_coords = np.vstack(all_coords)  # big (N, 2) array of all RA/Dec
+
+    # Make circles in one go
+    print('Collecting circles...', datetime.now().strftime("%H:%M:%S"))
+    circles = [Circle((ra, dec), maxsep) for ra, dec in all_coords]
+    pc = PatchCollection(circles, facecolor='none', edgecolor='magenta', linewidth=1)
+    ax.add_collection(pc)
+
+    # Scatter points per filter
+    cm = plt.colormaps.get_cmap("rainbow")
+    for i, df in enumerate(detectionFilters):
+        colour = cm(i / len(detectionFilters))
+        df_ra = coordsDict[df][0][nnIDdict[df]]
+        df_dec = coordsDict[df][1][nnIDdict[df]]
+        ax.scatter(df_ra, df_dec, marker='.', color=colour, label=df)
+
+    ax.set_xlabel("RA (deg)")
+    ax.set_ylabel("Dec (deg)")
+    if testing:
+        plt.title(f"Nearest Neighbours to each det for middle {size} rows. Maxsep: {maxsep_as}as")
+        print(">>>>>> NOTE: for small test catalogues, detections will appear as strips since all detections are takens from rows in the main catalogue.")
+    else:
+        plt.title(f"Nearest Neighbours to each det. Maxsep: {maxsep_as}as")
+    plt.legend()
+    plt.show()
+
+def nn_plotter_save(coordsDict, nnIDdict, maxsep, testing=True):
     """
     Plots a circle of radius maxsep around each of the points provided. 
     Provided points should be the nearest neighbours found by KDTree.
@@ -261,40 +326,34 @@ def nn_plotter(coordsDict, nnIDdict, maxsep, testing=True):
     maxsep(int/float)   Maximum allowed seperation across different band images (in arcseconds) to be considered the same object 
     """
     maxsep = maxsep / 3600
+    print("This bit takes a lil while..........")
 
     fig, ax = plt.subplots(figsize=(6, 6))
 
-    for df1, df2 in combinations(detectionFilters, 2):  # compare all unique pairs
+    # Set limits and aspect
+    ax.set_xlim(min(coordsDict[df1][0]) - 0.1, max(coordsDict[df1][0]) + 0.1)
+    ax.set_ylim(min(coordsDict[df1][1]) - 0.1, max(coordsDict[df1][1]) + 0.1)
+    ax.set_aspect('equal', adjustable='datalim')
 
-        # Set limits and equal aspect before adding circles
-        # x-axis = RA, y-axis = Dec
-        ax.set_xlim(min(coordsDict[df1][0]) - 0.1, max(coordsDict[df1][0]) + 0.1)
-        ax.set_ylim(min(coordsDict[df1][1]) - 0.1, max(coordsDict[df1][1]) + 0.1)
-        ax.set_aspect('equal', adjustable='datalim')  # ensures 1:1 scaling
+    # RA/Dec for filter 1
+    df1_ra  = coordsDict[df1][0][nnIDdict[df1]]
+    df1_dec = coordsDict[df1][1][nnIDdict[df1]]
 
-        # rename for readability
-        df1_ra  = coordsDict[df1][0][nnIDdict[df1]]  # all NN RA for  filt 1
-        df1_dec = coordsDict[df1][1][nnIDdict[df1]]  # all NN Dec for filt 1
+    for NNra, NNdec in zip(df1_ra, df1_dec):
+        for indiRA, indiDec in zip(NNra, NNdec):
+            validation_circle = Circle((indiRA, indiDec),
+                maxsep, fill=False, edgecolor='magenta', linewidth=1)
+            ax.add_patch(validation_circle)
 
-        # draw circles around all points
-        for NNra, NNdec in zip(df1_ra, df1_dec):
-            print('circles...................')
-            for indiRA, indiDec in zip(NNra, NNdec):
-                validation_circle = Circle((indiRA, indiDec),
-                    maxsep, fill=False, edgecolor='magenta', linewidth=1)
-                ax.add_patch(validation_circle)
+    # RA/Dec for filter 2
+    df2_ra  = coordsDict[df2][0][nnIDdict[df2]]
+    df2_dec = coordsDict[df2][1][nnIDdict[df2]]
 
-        df2 = detectionFilters[-1:] # let's get that last pesky filter yoloswag
-        df2 = df2[0]
-        df2_ra  = coordsDict[df2][0][nnIDdict[df2]]  # all NN RA for  filt 2
-        df2_dec = coordsDict[df2][1][nnIDdict[df2]]  # all NN Dec for filt 2
-
-        for NNra, NNdec in zip(df2_ra, df2_dec):
-            print('squares...................')
-            for indiRA, indiDec in zip(NNra, NNdec):
-                validation_circle = Circle((indiRA, indiDec),
-                    maxsep, fill=False, edgecolor='magenta', linewidth=1)
-                ax.add_patch(validation_circle)
+    for NNra, NNdec in zip(df2_ra, df2_dec):
+        for indiRA, indiDec in zip(NNra, NNdec):
+            validation_circle = Circle((indiRA, indiDec),
+                maxsep, fill=False, edgecolor='magenta', linewidth=1)
+            ax.add_patch(validation_circle)
 
     for df in detectionFilters:
         # colours for plot
@@ -314,7 +373,7 @@ def nn_plotter(coordsDict, nnIDdict, maxsep, testing=True):
         plt.title(f"Nearest Neighbours to each det for middle {size} rows")
         print(">>>>>> NOTE: for small test catalogues, detections will appear as strips since all detections are takens from rows in the main catalogue.")
     else:
-        plt.title(f"Nearest Neighbours to each det")
+        plt.title(f"Nearest Neighbours to each det. Maxsep: {maxsep}as")
     plt.legend()
     plt.show()
 
@@ -372,10 +431,11 @@ def show_same_objs(nnIDdict, coordsDict, maxsep):
 #modify colnames to preserve detFilt_measFilt
 #run_parallel(modify_colnames, detectionFilters, max_workers=len(detectionFilters), use_processes=False)
 #join_cats()
-size=100
-#make_small_test_cat(detectionFilters, size=size)
 
-maxsep = 100 # as
+size = 100
+make_small_test_cat(detectionFilters, size=size)
+
+maxsep = 1 # as
 nnIDdict, coordsDict = find_nearest(maxsep, size)
 nn_plotter(coordsDict, nnIDdict, maxsep)
 show_same_objs(nnIDdict, coordsDict, maxsep)
