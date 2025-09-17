@@ -8,9 +8,7 @@
 
 import os
 import time
-import h5py
 import numpy as np
-import astropy.units as u
 from random import randrange
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -19,20 +17,17 @@ from itertools import combinations
 from matplotlib.patches import Circle
 from astropy.table import Table, hstack, join
 from matplotlib.collections import PatchCollection
-from astropy.coordinates import SkyCoord, search_around_sky #TODO: look at source code to see if/how Astropy make their search robust against missed nearest neighbours
+from astropy.coordinates import SkyCoord, search_around_sky
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 baseDir = '/raid/scratch/hullyott/cataloguing/current/'
-globalCatDir = os.path.join(baseDir, 'data/catalogues/COSMOS_make_master_test/')
-masterCatPath = os.path.join(globalCatDir, 'master.fits')
-matchedDetsPath = os.path.join(globalCatDir, 'matchedDets.h5')
+globalCatDir = os.path.join(baseDir,  'data/catalogues/COSMOS_make_master_test/')
 
-detectionFilters = ['Y', 'J']#, 'H', 'K', 'JH', 'HK', 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y']
+detectionFilters = ['Y', 'J', 'H', 'K', 'JH', 'HK', 'HSC_G', 'HSC_R', 'HSC_I', 'HSC_Z', 'HSC_Y']
 
-start_fresh = False
-size = 5000 # number of rows to use in test cats
+size = 5 # number of rows to use in test cats
 maxsep_as = 1 
-testing = True
+testing = False
 verbose = True
 #####################################################################################################################################
 print('\n')
@@ -157,12 +152,18 @@ def join_cats():
 
     ### manual check ###
     command = f'topcat {combinedCatPath} &'
-    #os.system(command)
+    os.system(command)
 
 def make_small_test_cat(filters, size=50):
     """
     Makes a new catalogue with randomly sampled rows.
     """    
+    
+    import os
+    import numpy as np  
+    import astropy.units as u
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
 
     baseDir = '/raid/scratch/hullyott/cataloguing/current/'
     globalCatDir = os.path.join(baseDir, 'data/catalogues/COSMOS_make_master_test/')
@@ -188,14 +189,18 @@ def make_small_test_cat(filters, size=50):
 
     # open
     command = f'topcat {shortCatPath} &'
-    #os.system(command)
+    os.system(command)
 
-def find_matched_dets(maxsep_as, matchedDetsPath, testing=True, verbose=False):
+def find_matched_objects(maxsep_as, testing=True, verbose=False):
     """ 
     Writes a new table where identical detections that have been identified in multiples filters maintain the same ID number 
 
     maxsep(int/float) Maximum allowed seperation across different band images (in arcseconds) to be considered the same object 
     """
+
+    import astropy.units as u
+    from scipy.spatial import cKDTree # works in Cartesian, https://youtu.be/TLxWtXEbtFE
+    from astropy.coordinates import SkyCoord, search_around_sky, match_coordinates_sky #TODO: look at source code to see if/how Astropy make their search robust against missed nearest neighbours
     
     if testing:
         combinedCatPath = os.path.join(globalCatDir, "combined_cat_short.fits")
@@ -203,7 +208,6 @@ def find_matched_dets(maxsep_as, matchedDetsPath, testing=True, verbose=False):
         combinedCatPath = os.path.join(globalCatDir, "combined_cat.fits")
     
     print("Reading table ", os.path.basename(combinedCatPath), "...")
-
     table = Table.read(combinedCatPath) # the huge table with cols from every detFilt
 
     # find largest ID
@@ -218,7 +222,6 @@ def find_matched_dets(maxsep_as, matchedDetsPath, testing=True, verbose=False):
     # make coordinate-like objects to use with search_around_sky
     allCoordsDict = {} # pre-load all coords b4 matching for speed
     idDict = {} # the row indices of duplicate detections in the 'combined' catalogue
-    newIDs = [] # new IDs assigned to matched dets
 
     for filt in detectionFilters:
 
@@ -240,7 +243,7 @@ def find_matched_dets(maxsep_as, matchedDetsPath, testing=True, verbose=False):
             index = table.colnames.index(f'ID_{filt}')
             table.add_column(table[f'ID_{filt}'].copy(), name=f'New_ID_{filt}', index=index) # Insert at pos of old ID, initialise with copy of old IDs
 
-    print(datetime.now().strftime("%H:%M:%S"), "Finding matched detections...")
+    print("Finding matched objects...", datetime.now().strftime("%H:%M:%S"))
 
     for df1, df2 in combinations(detectionFilters, 2):  # compare all unique pairs
         coords1 = allCoordsDict[df1]
@@ -248,7 +251,6 @@ def find_matched_dets(maxsep_as, matchedDetsPath, testing=True, verbose=False):
 
         maxsep_deg = maxsep_as / 3600
         seplimit = maxsep_deg * u.deg # astropy quantity for search_around_sky
-        # Y detections dont have matched pairs in figure - is it bc S_a_s allows Y-Y matching?
         idx1, idx2, sep2d, _ = search_around_sky(coords1, coords2, seplimit)
         # idx1 the indics of the matching coords in coords1 
         # coords1[idx1[0]] matches with coords2[idx2[0]]
@@ -259,28 +261,17 @@ def find_matched_dets(maxsep_as, matchedDetsPath, testing=True, verbose=False):
 
         # re-assign unique ID numbers to the matched dets
         orig_df1_ID = table[f'ID_{detectionFilters[0]}'][orig_idx1] # allows extra traceability
-        newID  = newIDBase + orig_df1_ID.data
+        newUniqueID  = newIDBase + orig_df1_ID.data
+        
+        table[f'New_ID_{df1}'][orig_idx1] = newUniqueID # write over the old ID with unique ID
+        table[f'New_ID_{df2}'][orig_idx2] = newUniqueID # NB: matched dets will not nece be at the same row
 
-        table[f'New_ID_{df1}'][orig_idx1] = newID # write over the old ID with unique ID
-        table[f'New_ID_{df2}'][orig_idx2] = newID # NB: matched dets will not nece be at the same row
-        newID = newID.data.tolist()
-        newIDs.append(newID)
-
-    # write matched detections info to file for later use
-    print(datetime.now().strftime("%H:%M:%S"), "Writing matched detections file...")
-
-    newIDs = sum(newIDs, [])
-    newIDs = np.array(newIDs, dtype=np.int64) # convert to arr for h5 functionality and memory efficiency
-    with h5py.File(matchedDetsPath, "w") as f:
-        f.create_dataset('newIDs', data=newIDs)
-
+        #breakpoint()
     # write changes
     if testing:
-        matchedCatPath = os.path.join(globalCatDir, "master_short.fits",)
+        matchedCatPath = combinedCatPath.replace("_short.fits", "_matched_short.fits",)
     else:
-        matchedCatPath = masterCatPath
-
-    print(datetime.now().strftime("%H:%M:%S"), f"Writing {masterCatPath}")
+        matchedCatPath = combinedCatPath.replace(os.path.basename(combinedCatPath), "master.fits",)
     table.write(matchedCatPath, overwrite=True)
 
     # open
@@ -288,88 +279,16 @@ def find_matched_dets(maxsep_as, matchedDetsPath, testing=True, verbose=False):
     os.system(command)
 
 
-def matched_plotter(maxsep_as, matchedDetsPath, testing=True):
+def nn_plotter_save(coordsDict, nnIDdict, maxsep, testing=True):
     """
-    AIM: 
-    plots the mathced objects and a validation circle of radius = 1as around each 
-    (points and circles have colours that relate to their filters)
+    Plots a circle of radius maxsep around each of the points provided. 
+    Provided points should be the nearest neighbours found by KDTree.
 
-    maxsep_as(int/float)   Maximum allowed seperation across different band images (in arcseconds) to be considered the same object 
-    
-    CURRENT FUNCTIONALITY: 
-    plots the mathced objects and Y OBJECTS  without a matching counterpart as well as validation circle of radius = 1as around each 
+    coordsDict{dict}    All coordinates in the combined (or test) catalogue for each of the detection filters {filt: Ra, Dec}
+    nnIDdict{dict}      Indices of the nearest neighbours found by KDTree {filt: [idx]}
+    maxsep(int/float)   Maximum allowed seperation across different band images (in arcseconds) to be considered the same object 
     """
-    # assuming the IDs are correct - check them - get the ra dec of the objects at that id
-    maxsep_deg = maxsep_as / 3600
-    a = len(detectionFilters)
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    # Set limits and aspect
-    ax.set_xlim(148.5, 151)
-    ax.set_ylim(2, 2.3)
-    ax.set_aspect('equal', adjustable='datalim')
-
-    for df in detectionFilters:
-        with h5py.File(matchedDetsPath, "r") as f:     
-            newIDs = f["newIDs"][:] # [:] read entire file
-        
-        table = Table.read(masterCatPath) # the huge table with cols from every detFilt
-            
-        # Build mask: True if table ID is in newIDs
-        mask = np.isin(table[f"New_ID_{df}"], newIDs)
-
-        # Apply mask
-        matchedRows = table[mask]
-        excludedRows = table[~mask]
-
-        ra = matchedRows[f'RA_{df}']
-        dec = matchedRows[f'DEC_{df}']
-
-        # colours for plot
-        cm = plt.colormaps.get_cmap("rainbow")
-        i = detectionFilters.index(df)
-        colour = cm(i/a)
-
-        ## plot the scatter points
-        ax.scatter(ra, dec, marker='.', color=colour, label=df)
-
-        ## plot validation circle
-        for ra1, dec1 in zip(ra, dec):
-            validation_circle = Circle((ra1, dec1),
-                    maxsep_deg, fill=False, edgecolor=colour, linewidth=1)
-            ax.add_patch(validation_circle)
-
-    plt.title(f"Matched multi-band detections Maxsep: {maxsep_as}as")
-    ax.set_xlabel("RA (deg)")
-    ax.set_ylabel("Dec (deg)")
-    plt.legend()
-    plt.show()
-
-
-
-#####################################################################################################################################
-# call functions - move this to an execution script when sub-pipeline finished
-if testing:
-    masterCatPath = os.path.join(globalCatDir, 'master_short.fits')
-    matchedDetsPath = matchedDetsPath.replace('.h5', '_short.h5') 
-
-if start_fresh==True or os.path.isfile(masterCatPath)==False: 
-    # modify colnames to preserve detFilt_measFilt
-    #run_parallel(modify_colnames, detectionFilters)
-    #join_cats()
-
-    if testing:
-        make_small_test_cat(detectionFilters, size)
-
-    find_matched_dets(maxsep_as, matchedDetsPath, testing, verbose)
-
-elif start_fresh==False and os.path.isfile(masterCatPath)==True:
-    print(datetime.now().strftime("%H:%M:%S"), f"Plotting matched objdetectionsects from {masterCatPath}")
-    matched_plotter(maxsep_as, matchedDetsPath)
-
-'''
-
+    maxsep = maxsep / 3600
     print("This bit takes a lil while..........")
 
     fig, ax = plt.subplots(figsize=(6, 6))
@@ -420,5 +339,18 @@ elif start_fresh==False and os.path.isfile(masterCatPath)==True:
         plt.title(f"Nearest Neighbours to each det. Maxsep: {maxsep}as")
     plt.legend()
     plt.show()
-'''
+
+
+#####################################################################################################################################
+# call functions - move this to an execution script when sub-pipeline finished
+
+# modify colnames to preserve detFilt_measFilt
+run_parallel(modify_colnames, detectionFilters)
+join_cats()
+
+if testing:
+    make_small_test_cat(detectionFilters, size)
+
+find_matched_objects(maxsep_as, testing, verbose)
+
 
