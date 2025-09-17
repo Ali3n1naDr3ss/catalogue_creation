@@ -120,7 +120,6 @@ def modify_colnames(detFilt):
     catTable.rename_columns(list(renames.keys()), list(renames.values()))
     catTable.write(copycatPath, overwrite=True)
 
-
 def join_cats():
     """ Locates catalogues with the modifed colnames and joins them into a single, large table. Writes table to  globalCatDir. """
 
@@ -163,11 +162,6 @@ def join_cats():
     #os.system(command)
 
 def make_small_test_cat(filters, size=50):
-    """
-    Writes a new catalogue with a user-provided number of rows, sampled evenly either side of the middle row.
-
-    size(int)   number of rows to be included in the short catalogue
-    """
     import os
     import numpy as np  
     import astropy.units as u
@@ -188,7 +182,7 @@ def make_small_test_cat(filters, size=50):
         ra = table[f'RA_{filt}']
         ra = np.ma.MaskedArray(ra).filled(np.nan)
         ra = np.array(ra, dtype=float)
-        idx = len(ra) // 2 # divide by two. round down to nearest int
+        idx = len(ra) // 2
 
         mid_ra = table[idx][f'RA_{filt}']
         mid_dec = table[idx][f'DEC_{filt}']
@@ -273,17 +267,14 @@ def find_nearest(maxsep, size, testing=True, verbose=False):
 
     return nnIDdict, coordsDict
 
-def find_matched_objects(maxsep_as, size, testing=True, verbose=False):
-    """ 
-    Returns the positions of detections that are matched to within maxsep_as of a detection in a different filter.
-
-    maxsep(int/float) Maximum allowed seperation across different band images (in arcseconds) to be considered the same object 
+def find_matched_objects(maxsep_as, nnIDdict, coordsDict, testing=True):
     """
-
-    import astropy.units as u
-    from scipy.spatial import cKDTree # works in Cartesian, https://youtu.be/TLxWtXEbtFE
-    from astropy.coordinates import SkyCoord, search_around_sky, match_coordinates_sky #TODO: look at source code to see if/how Astropy make their search robust against missed nearest neighbours
+    Returns objects that are detected at the same position (within an error of maxsep_as) in multiple filters. 
     
+    sameObjsDict: {(df: RA, Dec, also detected in df...)}
+nnIDdict[df][detection][NN] 
+coordsDict[df][Ra/Dec][detection] all dets in that filter
+    """
     if testing:
         combinedCatPath = os.path.join(globalCatDir, "combined_cat_short.fits")
         combinedCatPath = os.path.join(globalCatDir, "YJH10Matches_short.fits")
@@ -294,12 +285,12 @@ def find_matched_objects(maxsep_as, size, testing=True, verbose=False):
     table = Table.read(combinedCatPath) # the huge table with cols from every detFilt
 
     # make coordinate-like objects to use with search_around_sky
-    coordsDict = {} # pre-load all coords b4 matching for speed
-    
-    for filt in detectionFilters:
+    allCoordsDict = {} # pre-load all coords b4 matching for speed
+
+    for df in detectionFilters:
         # get coords for filt
-        ra = table[f'RA_{filt}']
-        dec = table[f'DEC_{filt}']
+        ra = table[f'RA_{df}']
+        dec = table[f'DEC_{df}']
 
         # replace maksed values with nan
         ra = np.ma.MaskedArray(ra).filled(np.nan)
@@ -310,16 +301,29 @@ def find_matched_objects(maxsep_as, size, testing=True, verbose=False):
         dec = np.array(dec, dtype=float)
 
         # make into a 1D coord array
-        coordsDict[filt] = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)  # for search_around_sky attempt
+        #coordsDict[df] = SkyCoord(ra=ra * u.deg, dec=dec * u.deg) # for search_around_sky attempt
+        allCoordsDict[df] = np.array([ra, dec])                    # for manual attempt
+        # i.e. RA, Dec: allCoordsDict[df][0], allCoordsDict[df][1]
 
+    maxsep_deg = maxsep_as / 3600
+    nnIDdict = {}
     print("Finding nearest neighbours...", datetime.now().strftime("%H:%M:%S"))
     for df1, df2 in combinations(detectionFilters, 2):  # compare all unique pairs
-        coords1 = coordsDict[df1]
-        coords2 = coordsDict[df2]
+        coords1 = np.array(allCoordsDict[df1]).T # transopse to shape (N, 2) for cKDTree
+        coords2 = np.array(allCoordsDict[df2]).T # shape (M, 2)
 
-        seplimit = 1 * u.arcsec # maximum allowed seperation to be considered the same object
-        idx1, idx2, sep2d, _ = search_around_sky(coords1, coords2, seplimit)
-        print(idx1, idx2, sep2d, _)
+        tree1 = cKDTree(coords1)
+        k = 3 
+        distances, indices = tree1.query(coords2, k=k) 
+        # coords2[0] -> nearest in coords1 is indices[0]. coords2[1] -> coords1[indices[1]]
+
+        # check if 1st NN is within maxsep
+        nn = coords1[indices[1][0]]
+
+
+    breakpoint()
+    
+    
     
 
 
@@ -489,8 +493,8 @@ def show_same_objs(nnIDdict, coordsDict, maxsep):
 #run_parallel(modify_colnames, detectionFilters, max_workers=len(detectionFilters), use_processes=False)
 #join_cats()
 
-size = 5000
-make_small_test_cat(detectionFilters, size=size)
+size = 10
+#make_small_test_cat(detectionFilters, size=size)
 
 maxsep = 1 # as
 nnIDdict, coordsDict = find_nearest(maxsep, size)
