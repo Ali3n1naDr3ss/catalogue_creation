@@ -1,12 +1,12 @@
 # make redshift master catalogues - 18/09/25
 # For z = 8
-    # Locate masked mag catalogues JH, J, H
-    # find ra/dec of dets that are in J but not JH
-    # vertically stack the detections in J that are not in JH
-    # find ra/dec of dets that are in J but not JH
-    # vstack detections that are in H but not in JH-J
-
-    # ensure identical detections have consistent IDs
+    # Locate masked mag catalogues JH, J, H                     - DONE
+    # find ra/dec of dets that are in J but not JH              - DONE
+    # vertically stack the detections in J that are not in JH   - DONE
+    # find ra/dec of dets that are in H but not JH              - DONE
+    # find ra/dec of dets that are in H but not J               - DONE
+    # vstack detections that are in H but not in JH or in J     - DONE
+    # ensure identical detections have consistent IDs           - DONE
 
 
 import os
@@ -32,14 +32,22 @@ z8_dfs = ['JH', 'J', 'H'] # why not K for z=8 detections?
 testing = True
 verbose = True
 
-def new_ID_col(path):
+def new_ID_col(path, df):
     """ Inserts a new column which acts to preserve the original ID"""
     table = Table.read(path)
 
     # add new col so original ID can be traced
-    new_col_name = f'original_ID'
+    new_col_name = f'New_ID'
     if new_col_name not in table.colnames:
+        if df is 'JH':
+            new_IDs = table[f'ID'].copy()
+        elif df is 'J':
+            new_IDs = table[f'ID'].copy() + int(3e6)
+        elif df is 'H':
+            new_IDs = table[f'ID'].copy() + int(6e6)
+
         table.add_column(table[f'ID'].copy(), name=new_col_name, index=0)
+
     outputPath = path.replace('.fits', '_ID_col.fits')
     table.write(outputPath, overwrite=True)
     print("Written new table to: ", outputPath)
@@ -56,6 +64,7 @@ def prep_coords(paths):
     df2 = None
 
     for path in paths:
+        #new_ID_col(path)
 
         table = Table.read(path)
 
@@ -176,6 +185,8 @@ def find_unique(targetUniquesPath, comparisonCatPaths):
         # join distinct from JH and distinct from J tables and do s_a_s
 
         # stack distinct_from_JH and distinct_from_J
+
+        breakpoint()
         distinctFrom2Path = vstack_uniques(globalCatDir, distinctFromPaths[0], distinctFromPaths[1]) 
         distinctFromFilts = os.path.basename(distinctFrom2Path).split('_distinct_from_')[1].replace('.fits','').split('_')[0:3:1]
         distinctFromFilts = '_'.join(distinctFromFilts)
@@ -227,6 +238,7 @@ def find_unique(targetUniquesPath, comparisonCatPaths):
     #print("difference: ", abs(topcat_unique - numUnique))
     #print(abs((topcat_unique - numUnique))/topcat_unique *100, '%')
 
+
     ### TESTING/DEBUGGING ###
 
     return distinctFromPaths
@@ -234,6 +246,8 @@ def find_unique(targetUniquesPath, comparisonCatPaths):
 
 def vstack_uniques(globalCatDir, baseCatName, uniqueTableName):
     """
+    Vertically stacks the tables provided 
+    Assigns new ID column if necessary 
     
     baseCatPath(str)
     uniqueDetsToStack
@@ -247,20 +261,34 @@ def vstack_uniques(globalCatDir, baseCatName, uniqueTableName):
 
     baseTable = Table.read(baseCatPath)
     uniqueTable = Table.read(uniquePath)
-    print(len(baseTable))
-    print(len(uniqueTable))
     targetLength = len(baseTable) + len(uniqueTable)
     print("target length: ",targetLength)
-    # check col names
+
+    ### check col names and add new ID col
     for i in baseTable.colnames:
         if i not in uniqueTable.colnames:
             print("NO MATCH!: ", i, f"is not a column name in {uniquePath}")
 
+    ## add new col so old ID can be traced
+    new_col_name = 'New_ID'
+    if new_col_name not in uniqueTable.colnames:
+        #breakpoint()
+        new_IDs = uniqueTable[f'ID'].copy() + int(3e6)
+        uniqueTable.add_column(new_IDs, name=new_col_name, index=0)
+
+    # add new col to both tables
+    if new_col_name not in baseTable.colnames:
+        new_IDs = baseTable[f'ID'].copy() + int(3e6)
+        baseTable.add_column(new_IDs, name=new_col_name, index=0)
+
+    print(baseTable.colnames)
+    print(uniqueTable.colnames)
     tablesToStack.append(baseTable) 
     tablesToStack.append(uniqueTable)
 
     # stack tables
     newTable = vstack(tablesToStack)
+
     print("Final length: ", len(newTable))
     print("Target length achieved?: ", len(newTable) == targetLength)
 
@@ -290,6 +318,7 @@ def vstack_uniques(globalCatDir, baseCatName, uniqueTableName):
             newTable.write(newPath, overwrite=True)
         
             print("Written vertically stacked file to ", newPath)
+    print("COLUMNSSSS", newTable.colnames)
 
     return newPath
 
@@ -300,15 +329,17 @@ JH_path = os.path.join(globalCatDir, baseCatName)
 J_path = os.path.join(globalCatDir, 'det_J/COSMOS_DR2_MASKVISTADET_J_1.8as_IRAC2.8as.fits')
 H_path = os.path.join(globalCatDir, 'det_H/COSMOS_DR2_MASKVISTADET_H_1.8as_IRAC2.8as.fits')
 
-J_path = new_ID_col(J_path)
-JH_path = new_ID_col(JH_path)
-H_path = new_ID_col(H_path)
+
+J_path = new_ID_col(J_path, 'J')
+JH_path = new_ID_col(JH_path, 'JH')
+H_path = new_ID_col(H_path, 'H')
 
 uniqueJTable = find_unique(J_path, [JH_path])[0]
 
 # continuing as if J-uniques are found correctly. 
 # Next, vertically stakc J-uniques to JH cat -> J-JH cat
 J_JH_path = vstack_uniques(globalCatDir, baseCatName, uniqueJTable)
+
 
 # Find detections distinct from JH and J: unique to H
 # Vertically stakc H-uniques to J-JH cat 
